@@ -45,7 +45,7 @@ export default function Welcome() {
 }
 
 const useStyles = makeStyles((c) => ({
-  root: { flex: 1, backgroundColor: "#121211" },
+  root: { flex: 1, backgroundColor: "#000000" },
   content: { flex: 1, paddingHorizontal: spacing.xl, justifyContent: "space-between" },
   brandTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   logoBadge: { width: 40, height: 40, borderRadius: radius.md, backgroundColor: c.brandPrimary, alignItems: "center", justifyContent: "center" },

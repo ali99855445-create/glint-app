@@ -113,7 +113,7 @@ def public_user(u: dict) -> dict:
         "cover": u.get("cover"),
         "bio": u.get("bio"),
         "location": u.get("location"),
-        "verified": u.get("verified", False),
+        "verified": u.get("golden_tick", False),
         "privacy": u.get("privacy", "public"),
         "created_at": u.get("created_at"),
     }
@@ -277,7 +277,8 @@ async def register_init(body: RegisterInit):
         "cover": None,
         "bio": None,
         "location": None,
-        "verified": False,
+        "verified": False,  # email/phone OTP verified
+        "golden_tick": False,
         "otp": code,
         "otp_purpose": "signup",
         "privacy": "public",
@@ -1045,7 +1046,7 @@ async def submit_verification(body: VerificationSubmit, me=Depends(get_current_u
     existing = await db.verifications.find_one({"user_id": me["id"], "status": "pending"})
     if existing:
         raise HTTPException(400, "You already have a pending request")
-    if me.get("verified"):
+    if me.get("golden_tick"):
         raise HTTPException(400, "You are already verified")
     await db.verifications.insert_one({
         "id": new_id(), "user_id": me["id"], "document": body.document,
@@ -1193,7 +1194,7 @@ async def approve_verification(vid: str, _=Depends(require_admin)):
     if not v:
         raise HTTPException(404, "Not found")
     await db.verifications.update_one({"id": vid}, {"$set": {"status": "approved"}})
-    await db.users.update_one({"id": v["user_id"]}, {"$set": {"verified": True}})
+    await db.users.update_one({"id": v["user_id"]}, {"$set": {"golden_tick": True}})
     return {"ok": True}
 
 

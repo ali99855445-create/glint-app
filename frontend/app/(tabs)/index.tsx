@@ -9,15 +9,13 @@ import { PostCard } from "@/src/components/PostCard";
 import { StoryBar } from "@/src/components/StoryBar";
 import { Icon } from "@/src/components/Icon";
 import { Button } from "@/src/components/ui";
-import { useThemeMode } from "@/src/context/ThemeModeContext";
 import { usesNativeTabs } from "@/src/navigation";
 
 export default function Home() {
   const styles = useStyles();
-  const { colors, scheme } = useTheme();
+  const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { toggle } = useThemeMode();
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
 
   const feed = useQuery({ queryKey: ["feed"], queryFn: () => api.get("/posts/feed") });
@@ -42,9 +40,6 @@ export default function Home() {
                 <Text style={styles.badgeText}>{unreadCount > 9 ? "9+" : unreadCount}</Text>
               </View>
             )}
-          </Pressable>
-          <Pressable onPress={toggle} style={styles.headerBtn} testID="home-theme-toggle">
-            <Icon name={scheme === "dark" ? "sunny-outline" : "moon-outline"} size={22} color={colors.onSurface} />
           </Pressable>
           <Pressable onPress={() => router.push("/search")} style={styles.headerBtn} testID="home-search">
             <Icon name="search" size={22} color={colors.onSurface} />

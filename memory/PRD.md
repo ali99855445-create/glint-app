@@ -29,6 +29,8 @@ onboarding/registration (terms checkbox, basic info, email/phone OTP, profile+co
 - Dark/light/system theme toggle. Video uploads/calls disabled in UI (schema future-ready).
 - **Activity center** (2026-06): notifications for reactions (with emoji), comments, friend requests/accepts, and chat messages. Bell icon on home header w/ live unread badge (15s poll), full Activity screen with actor avatars + per-type icon badges, auto mark-all-read, tap-to-navigate to post/chat/friends. Friends tab badge shows pending request count.
 - Verified: 33/33 backend tests pass; key UI flows verified.
+- **Premium Gold & Charcoal theme** (2026-06): full re-theme to gold (#EAB308/#D97706) on charcoal (#0F172A/#1E293B) cards (#1F2937), white headings, muted grey secondary text. Dark is default; manual scheme override (web-safe) in theme.ts + ThemeModeContext, toggle still available (light keeps gold accents). Fixed golden-tick bug: `verified` (OTP) vs `golden_tick` are now separate fields — tick only after admin approval.
+- **Strict Black & Golden lock** (2026-06): theme locked to one palette — pure black (#000000/#0F0F0F) backgrounds, gold (#EAB308/#D97706) accents, white headings. `themes.light === themes.dark`, toggle UI removed, Stack contentStyle black, +html.tsx body black (no white flash on transitions/hydration). Verified by testing agent (computed-style assertions across all screens).
 
 ## Backlog / remaining (P1/P2)
 - P1: Realtime chat (websockets) instead of polling; force-update popup enforcement on client; in-app push delivery of notifications (native builds).

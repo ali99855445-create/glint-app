@@ -8,7 +8,6 @@ import { Icon } from "@/src/components/Icon";
 import { Button } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
 import { useAuth } from "@/src/context/AuthContext";
-import { useThemeMode } from "@/src/context/ThemeModeContext";
 import { api } from "@/src/api/client";
 
 function Row({ icon, label, value, onPress, danger, testID, rightEl }: any) {
@@ -33,7 +32,6 @@ export default function Settings() {
   const toast = useToast();
   const qc = useQueryClient();
   const { user, refresh, logout } = useAuth();
-  const { mode, setMode } = useThemeMode();
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const me = useQuery({ queryKey: ["me-settings"], queryFn: () => api.get("/users/me") });
@@ -78,18 +76,6 @@ export default function Settings() {
             }
           />
           <Row icon="ban-outline" label="Blocked users" onPress={() => router.push("/blocked")} testID="settings-blocked" />
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Appearance</Text>
-          <View style={styles.themeRow}>
-            {(["light", "dark", "system"] as const).map((m) => (
-              <Pressable key={m} onPress={() => setMode(m)} style={[styles.themeBtn, mode === m && { backgroundColor: colors.brandPrimary }]} testID={`settings-theme-${m}`}>
-                <Icon name={m === "light" ? "sunny" : m === "dark" ? "moon" : "phone-portrait"} size={18} color={mode === m ? colors.onBrandPrimary : colors.onSurfaceTertiary} />
-                <Text style={[styles.themeText, { color: mode === m ? colors.onBrandPrimary : colors.onSurfaceTertiary }]}>{m[0].toUpperCase() + m.slice(1)}</Text>
-              </Pressable>
-            ))}
-          </View>
         </View>
 
         <View style={styles.section}>

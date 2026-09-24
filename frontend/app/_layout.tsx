@@ -34,8 +34,8 @@ export default function RootLayout() {
 
   if (!fontsLoaded && !fontError) {
     return (
-      <View style={{ flex: 1, backgroundColor: "#F7F7F4", alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator color="#0FA968" />
+      <View style={{ flex: 1, backgroundColor: "#000000", alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator color="#EAB308" />
       </View>
     );
   }
@@ -51,7 +51,7 @@ export default function RootLayout() {
                   <AuthProvider>
                     <ToastProvider>
                       <ThemedStatusBar />
-                      <Stack screenOptions={{ headerShown: false, animation: "slide_from_right" }}>
+                      <Stack screenOptions={{ headerShown: false, animation: "slide_from_right", contentStyle: { backgroundColor: "#000000" } }}>
                         <Stack.Screen name="story/[userId]" options={{ animation: "fade", presentation: "fullScreenModal" }} />
                       </Stack>
                     </ToastProvider>

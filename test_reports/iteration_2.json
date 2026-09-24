@@ -1,0 +1,37 @@
+{
+  "summary": "Frontend-only theme regression test of Glint (Black & Golden lockdown). Verified via public preview URL with mobile viewport (375x667), computed-style background assertions + screenshots. RESULT: theme fix is effective — every tested screen renders black backgrounds with gold accents: Welcome rgb(0,0,0), Login rgb(0,0,0), Home feed rgb(0,0,0)/cards rgb(15,15,15), Chats rgb(0,0,0), Chat detail rgb(0,0,0), Profile rgb(0,0,0), Settings rgb(0,0,0), Admin login rgb(26,26,26 input area)/black root, Admin dashboard black with gold active chip + gold 'Reply & resolve' CTA. Gold accents confirmed: FAB '+' rgb(234,179,8)=#EAB308, gold Glint logo, gold active tab icon, gold admin chips/CTAs, white headings + grey subtext. src/theme.ts now uses a single 'glint' palette (surface #000000, surfaceSecondary #0F0F0F, brandPrimary #EAB308, brandSecondary #D97706) assigned to BOTH themes.light and themes.dark — theme is truly locked. Theme toggle UI removed from Settings (verified absent). Bug-vector test PASSED: localStorage glint_theme_mode='system' + emulated OS light preference still renders black (rgb(15,15,15)). Regression: login na@test.com/secret123 works, feed loads posts (Notif Alice, TESTA User), all 4 tabs navigate, settings opens, admin login admin@glint.app/GlintAdmin@2026 works, dashboard tab switching (Tickets->Users) works, user search renders. NEW FINDING: React Navigation default light theme card background rgb(242,242,242) sits under every screen (Stack has no custom nav theme in _layout.tsx) — invisible today but can flash during slide transitions; likely the original white-flash vector.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Root Stack (app/_layout.tsx)", "issue": "React Navigation DefaultTheme (light) paints every screen card background rgb(242,242,242) — a full-screen absolute div (css-view r-position-u8s1d, 375x667) sits under all screens incl. admin dashboard. Currently masked by opaque black screen roots, but can flash white-ish during slide_from_right transitions or if any screen root is non-opaque. This is very likely the residual source of the user-reported bright-white flashes.", "testID": "n/a", "priority": "HIGH"},
+      {"component": "app/+html.tsx body", "issue": "<body>/<html> have no background-color (transparent) — before React hydrates, the web preview paints browser-default white (flash on cold load). Add background:#000000 to body style.", "testID": "n/a", "priority": "MEDIUM"},
+      {"component": "app/_layout.tsx font loading", "issue": "Outfit/Figtree fonts loaded from jsdelivr CDN at runtime; first test run hit 'Failed to load font Ionicons - 12000ms timeout' which blocked screenshots and can leave icons broken on slow networks. Second run loaded fine (7 fonts, Ionicons:loaded). Consider bundling fonts as local assets.", "testID": "n/a", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_2.json"
+  ],
+  "action_items": [
+    "Wrap app in @react-navigation/native ThemeProvider with a custom dark nav theme ({...DarkTheme, colors: {...DarkTheme.colors, background:'#000000', card:'#000000', primary:'#EAB308', text:'#FFFFFF', border:'#262626'}}) in app/_layout.tsx, OR set Stack screenOptions contentStyle:{backgroundColor:'#000000'} to eliminate the rgb(242,242,242) card layer under screens.",
+    "Add backgroundColor '#000000' to <body> style in app/+html.tsx to prevent white flash before hydration.",
+    "Optional cleanup: ThemeModeContext still exposes setMode('light')/toggle (dead code now that themes.light===themes.dark) and settings.tsx retains unused themeRow/themeBtn/themeText styles — safe to remove.",
+    "Optional reliability: bundle Outfit/Figtree fonts locally instead of jsdelivr CDN to avoid font-load timeouts breaking icons/screenshots."
+  ],
+  "critical_code_review_comments": [
+    "THEME LOCK CONFIRMED: src/theme.ts exports a single 'glint' palette assigned to both themes.light and themes.dark — no white palette remains. Requirement colors match: #000000/#0F0F0F backgrounds, #EAB308 primary gold, #D97706 secondary gold, white headings, #9CA3AF/#E5E7EB grey subtext.",
+    "No hardcoded white/light backgrounds in any screen (grep verified) — remaining hardcoded '#FFFFFF' usages are icon/text colors on dark overlays only.",
+    "React Navigation theme not overridden — DefaultTheme light background rgb(242,242,242) underlies all screens (see ui_bugs). Fix is one ThemeProvider wrapper.",
+    "Admin tab testIDs are capitalized (admin-tab-Tickets, admin-tab-Users) — tests must match case.",
+    "Settings screen no longer has any theme/appearance toggle (verified in UI + code); ThemeModeProvider force-resets stale 'light' to 'dark' on boot and 'system' is now harmless because both schemes resolve to the same palette."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested this round (frontend-only request; login/feed/admin APIs exercised via UI all responded correctly)", "frontend": "100% of tested flows (welcome, login, home feed, chats, chat detail, profile, settings, admin login, admin dashboard + tab switching, system-mode bug vector) — all backgrounds black, gold accents present"},
+  "seed_data_creation": "None — reused existing user na@test.com and seeded admin. Feed contains prior test posts.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Theme lock verified working. Remaining cosmetic hardening: (1) react-navigation DefaultTheme card bg rgb(242,242,242) under all screens — fix via ThemeProvider/Stack contentStyle in app/_layout.tsx; (2) body bg transparent in app/+html.tsx. Admin chip testIDs are capitalized (admin-tab-Tickets/Verify/Reports/Users/Broadcast). Playwright screenshots on this preview intermittently time out 'waiting for fonts to load' — pass timeout and try/catch; computed-style BG assertions are the reliable check. Fonts load from jsdelivr CDN (slow first load).",
+  "rca_of_issue": "ORIGINAL BUG RCA: Two residual white-flash vectors remain after the palette lock, both verified live: (1) expo-router Stack uses @react-navigation DefaultTheme whose light colors.background = rgb(242,242,242); every screen card gets this background (confirmed via computed style of a full-screen absolute css-view on the admin dashboard). Screen roots currently cover it, but during slide_from_right transitions or on any non-opaque screen it shows as bright white — matching the user report. MITIGATION: pass custom dark navigation theme via ThemeProvider or Stack screenOptions contentStyle {backgroundColor:'#000000'}. (2) Web <body> has no background (transparent), so browser-default white shows before JS hydration on cold load. MITIGATION: set body backgroundColor '#000000' in app/+html.tsx. The core palette fix itself (themes.light === themes.dark === black/gold glint palette) is CONFIRMED CORRECT and all screens measure black with gold accents."
+}

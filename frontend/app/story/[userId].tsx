@@ -87,7 +87,7 @@ export default function StoryViewer() {
   return (
     <View style={styles.root} testID="story-viewer">
       {isText ? (
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: current.bg_color || "#0FA968", alignItems: "center", justifyContent: "center", padding: spacing.xl }]}>
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: current.bg_color || "#EAB308", alignItems: "center", justifyContent: "center", padding: spacing.xl }]}>
           <Text style={styles.storyText}>{current.text}</Text>
         </View>
       ) : (
@@ -157,7 +157,7 @@ export default function StoryViewer() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
   empty: { color: "#fff", fontFamily: fonts.medium, fontSize: 16 },
-  emptyLink: { color: "#15D182", fontFamily: fonts.semibold, fontSize: 16 },
+  emptyLink: { color: "#EAB308", fontFamily: fonts.semibold, fontSize: 16 },
   storyText: { color: "#FFFFFF", fontFamily: fonts.displayBold, fontSize: 30, textAlign: "center", lineHeight: 40 },
   topScrim: { position: "absolute", top: 0, left: 0, right: 0, height: 160 },
   bottomScrim: { position: "absolute", bottom: 0, left: 0, right: 0, height: 160 },
