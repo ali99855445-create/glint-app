@@ -27,11 +27,12 @@ onboarding/registration (terms checkbox, basic info, email/phone OTP, profile+co
 - Golden Tick verification (ID upload → admin approve), Help Center tickets.
 - Admin dashboard (stats, tickets resolve, verifications approve/reject, reports delete/dismiss, users suspend/delete, broadcast, force update).
 - Dark/light/system theme toggle. Video uploads/calls disabled in UI (schema future-ready).
+- **Activity center** (2026-06): notifications for reactions (with emoji), comments, friend requests/accepts, and chat messages. Bell icon on home header w/ live unread badge (15s poll), full Activity screen with actor avatars + per-type icon badges, auto mark-all-read, tap-to-navigate to post/chat/friends. Friends tab badge shows pending request count.
 - Verified: 33/33 backend tests pass; key UI flows verified.
 
 ## Backlog / remaining (P1/P2)
-- P1: Realtime chat (websockets) instead of polling; force-update popup enforcement on client.
-- P1: Notifications center for reactions/comments/requests.
+- P1: Realtime chat (websockets) instead of polling; force-update popup enforcement on client; in-app push delivery of notifications (native builds).
+- P1: Story viewers list; group chats.
 - P2: Saved posts bookmark folder screen; story viewers list; group chats.
 - P2: Split server.py into per-domain routers.
 

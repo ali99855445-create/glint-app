@@ -124,6 +124,21 @@ async def are_friends(a: str, b: str) -> bool:
     return f is not None
 
 
+async def notify(to_user: str, from_user: str, ntype: str, ref_id: Optional[str], text: str):
+    if to_user == from_user:
+        return
+    await db.notifications.insert_one({
+        "id": new_id(), "to_user": to_user, "from_user": from_user,
+        "type": ntype, "ref_id": ref_id, "text": text,
+        "read": False, "created_at": now_iso(),
+    })
+
+
+async def get_user_name(uid: str) -> str:
+    u = await db.users.find_one({"id": uid}, {"_id": 0, "full_name": 1})
+    return u.get("full_name", "Someone") if u else "Someone"
+
+
 async def enrich_author(user_id: str) -> dict:
     u = await db.users.find_one({"id": user_id}, {"_id": 0})
     return public_user(u)
@@ -487,6 +502,7 @@ async def send_request(user_id: str, me=Depends(get_current_user)):
         "id": new_id(), "from": me["id"], "to": user_id,
         "status": "pending", "created_at": now_iso(),
     })
+    await notify(user_id, me["id"], "friend_request", user_id, f"{me['full_name']} sent you a friend request")
     return {"ok": True}
 
 
@@ -499,6 +515,7 @@ async def accept_request(req_from: str, me=Depends(get_current_user)):
     await db.friendships.insert_one({
         "id": new_id(), "users": [req_from, me["id"]], "created_at": now_iso(),
     })
+    await notify(req_from, me["id"], "friend_accept", me["id"], f"{me['full_name']} accepted your friend request")
     return {"ok": True}
 
 
@@ -680,6 +697,8 @@ async def react_post(post_id: str, body: ReactionBody, me=Depends(get_current_us
     key = f"reactions.{me['id']}"
     if body.reaction:
         await db.posts.update_one({"id": post_id}, {"$set": {key: body.reaction}})
+        emoji = {"like": "👍", "love": "❤️", "haha": "😂", "wow": "😮", "sad": "😢", "angry": "😡"}.get(body.reaction, "👍")
+        await notify(p["author_id"], me["id"], "reaction", post_id, f"{me['full_name']} reacted {emoji} to your post")
     else:
         await db.posts.update_one({"id": post_id}, {"$unset": {key: ""}})
     fresh = await db.posts.find_one({"id": post_id})
@@ -764,6 +783,7 @@ async def add_comment(post_id: str, body: CommentCreate, me=Depends(get_current_
         "text": body.text.strip(), "deleted_at": None, "created_at": now_iso(),
     }
     await db.comments.insert_one(doc)
+    await notify(p["author_id"], me["id"], "comment", post_id, f"{me['full_name']} commented: {doc['text'][:60]}")
     return {
         "id": doc["id"], "author": await enrich_author(me["id"]),
         "text": doc["text"], "created_at": doc["created_at"], "is_mine": True,
@@ -956,6 +976,7 @@ async def send_message(body: MessageCreate, me=Depends(get_current_user)):
     }
     await db.messages.insert_one(msg)
     preview = body.text if body.type == "text" else ("📷 Photo" if body.type == "photo" else "🎤 Voice note")
+    await notify(to_user, me["id"], "message", me["id"], f"{me['full_name']}: {preview[:60]}")
     await db.conversations.update_one(
         {"id": cid},
         {"$set": {
@@ -986,6 +1007,36 @@ async def mute_chat(conversation_id: str, me=Depends(get_current_user)):
 async def heartbeat(me=Depends(get_current_user)):
     await db.users.update_one({"id": me["id"]}, {"$set": {"last_seen": now_iso()}})
     return {"ok": True}
+
+
+# ----------------------------- notifications -----------------------------
+@api.get("/notifications")
+async def list_notifications(me=Depends(get_current_user)):
+    cur = db.notifications.find({"to_user": me["id"]}).sort("created_at", -1).limit(60)
+    out = []
+    async for n in cur:
+        actor = await db.users.find_one({"id": n["from_user"]}, {"_id": 0})
+        out.append({
+            "id": n["id"],
+            "type": n["type"],
+            "ref_id": n.get("ref_id"),
+            "text": n.get("text"),
+            "read": n.get("read", False),
+            "created_at": n["created_at"],
+            "actor": public_user(actor),
+        })
+    return out
+
+
+@api.post("/notifications/read-all")
+async def read_all_notifications(me=Depends(get_current_user)):
+    await db.notifications.update_many({"to_user": me["id"]}, {"$set": {"read": True}})
+    return {"ok": True}
+
+
+@api.get("/notifications/unread-count")
+async def unread_count(me=Depends(get_current_user)):
+    return {"count": await db.notifications.count_documents({"to_user": me["id"], "read": False})}
 
 
 # ----------------------------- verification -----------------------------

@@ -23,6 +23,8 @@ export default function Home() {
   const feed = useQuery({ queryKey: ["feed"], queryFn: () => api.get("/posts/feed") });
   const stories = useQuery({ queryKey: ["stories"], queryFn: () => api.get("/stories/feed") });
   const config = useQuery({ queryKey: ["config"], queryFn: () => api.get("/config") });
+  const unread = useQuery({ queryKey: ["unread-count"], queryFn: () => api.get("/notifications/unread-count"), refetchInterval: 15000 });
+  const unreadCount = unread.data?.count || 0;
 
   const refreshing = feed.isRefetching || stories.isRefetching;
   const broadcast = config.data?.broadcast;
@@ -33,6 +35,14 @@ export default function Home() {
       <View style={styles.header}>
         <Text style={styles.logo}>Glint</Text>
         <View style={styles.headerActions}>
+          <Pressable onPress={() => router.push("/notifications")} style={styles.headerBtn} testID="home-notifications">
+            <Icon name="notifications-outline" size={22} color={colors.onSurface} />
+            {unreadCount > 0 && (
+              <View style={styles.badge} testID="home-notif-badge">
+                <Text style={styles.badgeText}>{unreadCount > 9 ? "9+" : unreadCount}</Text>
+              </View>
+            )}
+          </Pressable>
           <Pressable onPress={toggle} style={styles.headerBtn} testID="home-theme-toggle">
             <Icon name={scheme === "dark" ? "sunny-outline" : "moon-outline"} size={22} color={colors.onSurface} />
           </Pressable>
@@ -88,6 +98,8 @@ const useStyles = makeStyles((c) => ({
   logo: { color: c.brand, fontFamily: fonts.displayBold, fontSize: 28 },
   headerActions: { flexDirection: "row", gap: spacing.xs },
   headerBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.border, alignItems: "center", justifyContent: "center" },
+  badge: { position: "absolute", top: -2, right: -2, backgroundColor: c.error, minWidth: 18, height: 18, borderRadius: 9, alignItems: "center", justifyContent: "center", paddingHorizontal: 4, borderWidth: 2, borderColor: c.surface },
+  badgeText: { color: c.onError, fontFamily: fonts.semibold, fontSize: 10 },
   broadcast: { flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: c.brandSecondary, marginHorizontal: spacing.lg, marginBottom: spacing.sm, paddingVertical: spacing.md, paddingHorizontal: spacing.lg, borderRadius: radius.md },
   broadcastText: { flex: 1, color: c.onBrandSecondary, fontFamily: fonts.medium, fontSize: 14 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
