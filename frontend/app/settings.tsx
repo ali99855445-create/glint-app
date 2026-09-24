@@ -88,6 +88,13 @@ export default function Settings() {
         </View>
 
         <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Legal</Text>
+          <Row icon="document-text-outline" label="Terms & Conditions" onPress={() => router.push("/legal/terms")} testID="settings-terms" />
+          <Row icon="lock-closed-outline" label="Privacy Policy" onPress={() => router.push("/legal/privacy")} testID="settings-privacy-policy" />
+          <Row icon="people-outline" label="Community Standards" onPress={() => router.push("/legal/guidelines")} testID="settings-guidelines" />
+        </View>
+
+        <View style={styles.section}>
           <Row icon="log-out-outline" label="Log out" onPress={doLogout} testID="settings-logout" />
           <Row icon="trash-outline" label="Delete account" danger onPress={() => setConfirmDelete(true)} testID="settings-delete" />
         </View>
