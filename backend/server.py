@@ -1,0 +1,1277 @@
+import os
+import uuid
+import random
+import logging
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional
+
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form, Header, Query
+from fastapi.responses import Response
+from dotenv import load_dotenv
+from starlette.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, Field
+import jwt
+import bcrypt
+
+import storage_helper
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ['DB_NAME']]
+
+JWT_SECRET = os.environ['JWT_SECRET']
+ADMIN_EMAIL = os.environ['ADMIN_EMAIL']
+ADMIN_PASSWORD = os.environ['ADMIN_PASSWORD']
+
+app = FastAPI()
+api = APIRouter(prefix="/api")
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("glint")
+
+
+# ----------------------------- helpers -----------------------------
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def now_dt():
+    return datetime.now(timezone.utc)
+
+
+def new_id():
+    return str(uuid.uuid4())
+
+
+def hash_pw(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_pw(pw: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(pw.encode(), hashed.encode())
+    except Exception:
+        return False
+
+
+def make_token(user_id: str, is_admin: bool = False) -> str:
+    payload = {
+        "sub": user_id,
+        "admin": is_admin,
+        "exp": datetime.now(timezone.utc) + timedelta(days=30),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def decode_token(token: str) -> dict:
+    return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+
+
+async def get_current_user(authorization: Optional[str] = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Not authenticated")
+    token = authorization.split(" ", 1)[1]
+    try:
+        payload = decode_token(token)
+    except Exception:
+        raise HTTPException(401, "Invalid token")
+    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
+    if not user or user.get("deleted_at"):
+        raise HTTPException(401, "User not found")
+    if user.get("suspended"):
+        raise HTTPException(403, "Account suspended")
+    return user
+
+
+async def require_admin(authorization: Optional[str] = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Not authenticated")
+    token = authorization.split(" ", 1)[1]
+    try:
+        payload = decode_token(token)
+    except Exception:
+        raise HTTPException(401, "Invalid token")
+    if not payload.get("admin"):
+        raise HTTPException(403, "Admin only")
+    return payload
+
+
+def public_user(u: dict) -> dict:
+    if not u:
+        return None
+    return {
+        "id": u["id"],
+        "full_name": u.get("full_name"),
+        "username": u.get("username"),
+        "avatar": u.get("avatar"),
+        "cover": u.get("cover"),
+        "bio": u.get("bio"),
+        "location": u.get("location"),
+        "verified": u.get("verified", False),
+        "privacy": u.get("privacy", "public"),
+        "created_at": u.get("created_at"),
+    }
+
+
+async def are_friends(a: str, b: str) -> bool:
+    f = await db.friendships.find_one({"users": {"$all": [a, b]}})
+    return f is not None
+
+
+async def enrich_author(user_id: str) -> dict:
+    u = await db.users.find_one({"id": user_id}, {"_id": 0})
+    return public_user(u)
+
+
+# ----------------------------- models -----------------------------
+class RegisterInit(BaseModel):
+    full_name: str
+    username: str
+    method: str  # "email" | "phone"
+    contact: str  # email or phone
+    password: str
+
+
+class VerifyOtp(BaseModel):
+    user_id: str
+    code: str
+
+
+class LoginBody(BaseModel):
+    contact: str
+    password: str
+
+
+class ForgotBody(BaseModel):
+    contact: str
+
+
+class ResetBody(BaseModel):
+    user_id: str
+    code: str
+    password: str
+
+
+class ProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    avatar: Optional[str] = None
+    cover: Optional[str] = None
+    privacy: Optional[str] = None
+
+
+class PostCreate(BaseModel):
+    type: str = "text"  # text | photo | poll
+    text: Optional[str] = ""
+    image: Optional[str] = None
+    poll_options: Optional[List[str]] = None
+
+
+class CommentCreate(BaseModel):
+    text: str
+
+
+class ReactionBody(BaseModel):
+    reaction: Optional[str] = None  # like|love|haha|wow|sad|angry or null to remove
+
+
+class ReportBody(BaseModel):
+    target_type: str
+    target_id: str
+    reason: str
+
+
+class StoryCreate(BaseModel):
+    type: str  # photo | text
+    image: Optional[str] = None
+    text: Optional[str] = None
+    bg_color: Optional[str] = None
+
+
+class MessageCreate(BaseModel):
+    conversation_id: Optional[str] = None
+    to_user: Optional[str] = None
+    type: str = "text"  # text | photo | voice
+    text: Optional[str] = None
+    media: Optional[str] = None
+    duration: Optional[float] = None
+
+
+class VerificationSubmit(BaseModel):
+    document: str
+    full_legal_name: str
+    note: Optional[str] = None
+
+
+class TicketCreate(BaseModel):
+    subject: str
+    description: str
+    screenshot: Optional[str] = None
+
+
+class AdminLogin(BaseModel):
+    email: str
+    password: str
+
+
+class BroadcastBody(BaseModel):
+    message: str
+    active: bool = True
+
+
+class ForceUpdateBody(BaseModel):
+    active: bool
+    message: Optional[str] = None
+    min_version: Optional[str] = None
+
+
+# ----------------------------- auth -----------------------------
+@api.post("/auth/register-init")
+async def register_init(body: RegisterInit):
+    username = body.username.strip().lower()
+    if len(username) < 3:
+        raise HTTPException(400, "Username must be at least 3 characters")
+    if len(body.password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    existing = await db.users.find_one({"username": username, "deleted_at": None})
+    if existing:
+        raise HTTPException(400, "Username already taken")
+    contact = body.contact.strip().lower()
+    field = "email" if body.method == "email" else "phone"
+    dup = await db.users.find_one({field: contact, "verified": True, "deleted_at": None})
+    if dup:
+        raise HTTPException(400, f"An account with this {field} already exists")
+
+    code = f"{random.randint(0, 999999):06d}"
+    uid = new_id()
+    doc = {
+        "id": uid,
+        "full_name": body.full_name.strip(),
+        "username": username,
+        "email": contact if field == "email" else None,
+        "phone": contact if field == "phone" else None,
+        "password": hash_pw(body.password),
+        "avatar": None,
+        "cover": None,
+        "bio": None,
+        "location": None,
+        "verified": False,
+        "otp": code,
+        "otp_purpose": "signup",
+        "privacy": "public",
+        "suspended": False,
+        "deleted_at": None,
+        "created_at": now_iso(),
+    }
+    # remove any stale unverified signup for same username
+    await db.users.delete_many({"username": username, "verified": False})
+    await db.users.insert_one(doc)
+    logger.info(f"[OTP] signup code for {contact}: {code}")
+    return {"user_id": uid, "dev_otp": code, "message": "OTP sent"}
+
+
+@api.post("/auth/verify-otp")
+async def verify_otp(body: VerifyOtp):
+    u = await db.users.find_one({"id": body.user_id})
+    if not u:
+        raise HTTPException(404, "User not found")
+    if u.get("otp") != body.code:
+        raise HTTPException(400, "Invalid OTP code")
+    await db.users.update_one({"id": body.user_id}, {"$set": {"verified": True, "otp": None}})
+    token = make_token(body.user_id)
+    fresh = await db.users.find_one({"id": body.user_id}, {"_id": 0})
+    return {"token": token, "user": public_user(fresh)}
+
+
+@api.post("/auth/resend-otp")
+async def resend_otp(body: VerifyOtp):
+    u = await db.users.find_one({"id": body.user_id})
+    if not u:
+        raise HTTPException(404, "User not found")
+    code = f"{random.randint(0, 999999):06d}"
+    await db.users.update_one({"id": body.user_id}, {"$set": {"otp": code}})
+    logger.info(f"[OTP] resend for {u.get('username')}: {code}")
+    return {"dev_otp": code, "message": "OTP resent"}
+
+
+@api.post("/auth/login")
+async def login(body: LoginBody):
+    contact = body.contact.strip().lower()
+    u = await db.users.find_one({
+        "$or": [{"email": contact}, {"phone": contact}, {"username": contact}],
+        "deleted_at": None,
+    })
+    if not u or not verify_pw(body.password, u["password"]):
+        raise HTTPException(400, "Invalid credentials")
+    if not u.get("verified"):
+        raise HTTPException(403, "Please verify your account first")
+    if u.get("suspended"):
+        raise HTTPException(403, "Your account has been suspended")
+    await db.users.update_one({"id": u["id"]}, {"$set": {"last_seen": now_iso()}})
+    token = make_token(u["id"])
+    return {"token": token, "user": public_user(u)}
+
+
+@api.post("/auth/forgot")
+async def forgot(body: ForgotBody):
+    contact = body.contact.strip().lower()
+    u = await db.users.find_one({
+        "$or": [{"email": contact}, {"phone": contact}, {"username": contact}],
+        "deleted_at": None,
+    })
+    if not u:
+        raise HTTPException(404, "No account found with these details")
+    code = f"{random.randint(0, 999999):06d}"
+    await db.users.update_one({"id": u["id"]}, {"$set": {"otp": code, "otp_purpose": "reset"}})
+    logger.info(f"[OTP] reset for {u.get('username')}: {code}")
+    return {"user_id": u["id"], "dev_otp": code, "message": "Reset code sent"}
+
+
+@api.post("/auth/reset")
+async def reset(body: ResetBody):
+    u = await db.users.find_one({"id": body.user_id})
+    if not u or u.get("otp") != body.code:
+        raise HTTPException(400, "Invalid reset code")
+    if len(body.password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    await db.users.update_one({"id": body.user_id}, {"$set": {"password": hash_pw(body.password), "otp": None}})
+    token = make_token(body.user_id)
+    fresh = await db.users.find_one({"id": body.user_id}, {"_id": 0})
+    return {"token": token, "user": public_user(fresh)}
+
+
+# ----------------------------- users -----------------------------
+@api.get("/users/me")
+async def get_me(me=Depends(get_current_user)):
+    saved = await db.saved.count_documents({"user_id": me["id"]})
+    friends = await db.friendships.count_documents({"users": me["id"]})
+    posts = await db.posts.count_documents({"author_id": me["id"], "deleted_at": None})
+    data = public_user(me)
+    data.update({
+        "email": me.get("email"),
+        "phone": me.get("phone"),
+        "counts": {"saved": saved, "friends": friends, "posts": posts},
+    })
+    return data
+
+
+@api.put("/users/me")
+async def update_me(body: ProfileUpdate, me=Depends(get_current_user)):
+    update = {k: v for k, v in body.dict().items() if v is not None}
+    if update:
+        await db.users.update_one({"id": me["id"]}, {"$set": update})
+    fresh = await db.users.find_one({"id": me["id"]}, {"_id": 0})
+    return public_user(fresh)
+
+
+@api.get("/users/search")
+async def search_users(q: str = Query(""), me=Depends(get_current_user)):
+    q = q.strip().lower()
+    if not q:
+        return []
+    blocked = set(me.get("blocked", []))
+    cur = db.users.find({
+        "deleted_at": None,
+        "verified": True,
+        "id": {"$ne": me["id"]},
+        "$or": [
+            {"username": {"$regex": q, "$options": "i"}},
+            {"full_name": {"$regex": q, "$options": "i"}},
+        ],
+    }, {"_id": 0}).limit(30)
+    out = []
+    async for u in cur:
+        if u["id"] in blocked:
+            continue
+        out.append(public_user(u))
+    return out
+
+
+@api.get("/users/{username}")
+async def get_user(username: str, me=Depends(get_current_user)):
+    u = await db.users.find_one({"username": username.lower(), "deleted_at": None}, {"_id": 0})
+    if not u:
+        raise HTTPException(404, "User not found")
+    data = public_user(u)
+    friend = await are_friends(me["id"], u["id"])
+    # friend request status
+    req = await db.friend_requests.find_one({
+        "$or": [
+            {"from": me["id"], "to": u["id"]},
+            {"from": u["id"], "to": me["id"]},
+        ],
+        "status": "pending",
+    })
+    fr_status = "none"
+    if friend:
+        fr_status = "friends"
+    elif req:
+        fr_status = "outgoing" if req["from"] == me["id"] else "incoming"
+    data["friend_status"] = fr_status
+    data["is_me"] = u["id"] == me["id"]
+    data["is_blocked"] = u["id"] in set(me.get("blocked", []))
+    can_view = (u.get("privacy") != "friends") or friend or data["is_me"]
+    data["can_view"] = can_view
+    data["counts"] = {
+        "friends": await db.friendships.count_documents({"users": u["id"]}),
+        "posts": await db.posts.count_documents({"author_id": u["id"], "deleted_at": None}),
+    }
+    if can_view:
+        posts = await feed_posts_for_author(u["id"], me["id"])
+        data["posts"] = posts
+    else:
+        data["posts"] = []
+    return data
+
+
+@api.delete("/users/me")
+async def delete_account(me=Depends(get_current_user)):
+    ts = now_iso()
+    await db.users.update_one({"id": me["id"]}, {"$set": {"deleted_at": ts, "verified": False}})
+    await db.posts.update_many({"author_id": me["id"]}, {"$set": {"deleted_at": ts}})
+    await db.stories.update_many({"author_id": me["id"]}, {"$set": {"deleted_at": ts}})
+    return {"ok": True}
+
+
+@api.post("/users/{user_id}/block")
+async def block_user(user_id: str, me=Depends(get_current_user)):
+    await db.users.update_one({"id": me["id"]}, {"$addToSet": {"blocked": user_id}})
+    # remove friendship + requests
+    await db.friendships.delete_many({"users": {"$all": [me["id"], user_id]}})
+    await db.friend_requests.delete_many({"$or": [
+        {"from": me["id"], "to": user_id}, {"from": user_id, "to": me["id"]}]})
+    return {"ok": True}
+
+
+@api.post("/users/{user_id}/unblock")
+async def unblock_user(user_id: str, me=Depends(get_current_user)):
+    await db.users.update_one({"id": me["id"]}, {"$pull": {"blocked": user_id}})
+    return {"ok": True}
+
+
+@api.get("/users/me/blocked")
+async def blocked_list(me=Depends(get_current_user)):
+    ids = me.get("blocked", [])
+    out = []
+    for uid in ids:
+        u = await db.users.find_one({"id": uid}, {"_id": 0})
+        if u:
+            out.append(public_user(u))
+    return out
+
+
+# ----------------------------- friends -----------------------------
+@api.post("/friends/request/{user_id}")
+async def send_request(user_id: str, me=Depends(get_current_user)):
+    if user_id == me["id"]:
+        raise HTTPException(400, "Cannot friend yourself")
+    if await are_friends(me["id"], user_id):
+        raise HTTPException(400, "Already friends")
+    existing = await db.friend_requests.find_one({
+        "$or": [
+            {"from": me["id"], "to": user_id},
+            {"from": user_id, "to": me["id"]},
+        ],
+        "status": "pending",
+    })
+    if existing:
+        raise HTTPException(400, "Request already pending")
+    await db.friend_requests.insert_one({
+        "id": new_id(), "from": me["id"], "to": user_id,
+        "status": "pending", "created_at": now_iso(),
+    })
+    return {"ok": True}
+
+
+@api.post("/friends/accept/{req_from}")
+async def accept_request(req_from: str, me=Depends(get_current_user)):
+    req = await db.friend_requests.find_one({"from": req_from, "to": me["id"], "status": "pending"})
+    if not req:
+        raise HTTPException(404, "Request not found")
+    await db.friend_requests.update_one({"id": req["id"]}, {"$set": {"status": "accepted"}})
+    await db.friendships.insert_one({
+        "id": new_id(), "users": [req_from, me["id"]], "created_at": now_iso(),
+    })
+    return {"ok": True}
+
+
+@api.post("/friends/reject/{req_from}")
+async def reject_request(req_from: str, me=Depends(get_current_user)):
+    await db.friend_requests.delete_many({"from": req_from, "to": me["id"], "status": "pending"})
+    return {"ok": True}
+
+
+@api.post("/friends/cancel/{user_id}")
+async def cancel_request(user_id: str, me=Depends(get_current_user)):
+    await db.friend_requests.delete_many({"from": me["id"], "to": user_id, "status": "pending"})
+    return {"ok": True}
+
+
+@api.delete("/friends/{user_id}")
+async def remove_friend(user_id: str, me=Depends(get_current_user)):
+    await db.friendships.delete_many({"users": {"$all": [me["id"], user_id]}})
+    await db.friend_requests.delete_many({"$or": [
+        {"from": me["id"], "to": user_id}, {"from": user_id, "to": me["id"]}]})
+    return {"ok": True}
+
+
+@api.get("/friends")
+async def list_friends(me=Depends(get_current_user)):
+    cur = db.friendships.find({"users": me["id"]})
+    out = []
+    async for f in cur:
+        other = [x for x in f["users"] if x != me["id"]][0]
+        u = await db.users.find_one({"id": other, "deleted_at": None}, {"_id": 0})
+        if u:
+            out.append(public_user(u))
+    return out
+
+
+@api.get("/friends/requests")
+async def friend_requests(me=Depends(get_current_user)):
+    incoming = []
+    async for r in db.friend_requests.find({"to": me["id"], "status": "pending"}):
+        u = await db.users.find_one({"id": r["from"], "deleted_at": None}, {"_id": 0})
+        if u:
+            incoming.append(public_user(u))
+    outgoing = []
+    async for r in db.friend_requests.find({"from": me["id"], "status": "pending"}):
+        u = await db.users.find_one({"id": r["to"], "deleted_at": None}, {"_id": 0})
+        if u:
+            outgoing.append(public_user(u))
+    return {"incoming": incoming, "outgoing": outgoing}
+
+
+@api.get("/friends/suggestions")
+async def suggestions(me=Depends(get_current_user)):
+    friend_ids = set()
+    async for f in db.friendships.find({"users": me["id"]}):
+        for x in f["users"]:
+            friend_ids.add(x)
+    pending = set()
+    async for r in db.friend_requests.find({"$or": [{"from": me["id"]}, {"to": me["id"]}], "status": "pending"}):
+        pending.add(r["from"])
+        pending.add(r["to"])
+    exclude = friend_ids | pending | set(me.get("blocked", [])) | {me["id"]}
+    out = []
+    cur = db.users.find({"deleted_at": None, "verified": True, "id": {"$nin": list(exclude)}}, {"_id": 0}).limit(20)
+    async for u in cur:
+        out.append(public_user(u))
+    return out
+
+
+# ----------------------------- posts -----------------------------
+async def serialize_post(p: dict, me_id: str) -> dict:
+    author = await enrich_author(p["author_id"])
+    reactions = p.get("reactions", {})  # {user_id: type}
+    counts = {}
+    for r in reactions.values():
+        counts[r] = counts.get(r, 0) + 1
+    my_reaction = reactions.get(me_id)
+    saved = await db.saved.find_one({"user_id": me_id, "post_id": p["id"]}) is not None
+    comment_count = await db.comments.count_documents({"post_id": p["id"], "deleted_at": None})
+    data = {
+        "id": p["id"],
+        "author": author,
+        "type": p.get("type", "text"),
+        "text": p.get("text", ""),
+        "image": p.get("image"),
+        "created_at": p.get("created_at"),
+        "reaction_counts": counts,
+        "total_reactions": sum(counts.values()),
+        "my_reaction": my_reaction,
+        "saved": saved,
+        "comment_count": comment_count,
+        "is_mine": p["author_id"] == me_id,
+    }
+    if p.get("type") == "poll":
+        votes = p.get("votes", {})  # {user_id: option_index}
+        opts = p.get("poll_options", [])
+        tally = [0] * len(opts)
+        for v in votes.values():
+            if 0 <= v < len(opts):
+                tally[v] += 1
+        data["poll"] = {
+            "options": opts,
+            "tally": tally,
+            "total_votes": sum(tally),
+            "my_vote": votes.get(me_id),
+        }
+    return data
+
+
+async def feed_posts_for_author(author_id: str, me_id: str):
+    cur = db.posts.find({"author_id": author_id, "deleted_at": None}).sort("created_at", -1).limit(50)
+    out = []
+    async for p in cur:
+        out.append(await serialize_post(p, me_id))
+    return out
+
+
+@api.post("/posts")
+async def create_post(body: PostCreate, me=Depends(get_current_user)):
+    doc = {
+        "id": new_id(),
+        "author_id": me["id"],
+        "type": body.type,
+        "text": (body.text or "").strip(),
+        "image": body.image,
+        "reactions": {},
+        "deleted_at": None,
+        "created_at": now_iso(),
+    }
+    if body.type == "poll":
+        opts = [o.strip() for o in (body.poll_options or []) if o.strip()]
+        if len(opts) < 2:
+            raise HTTPException(400, "Poll needs at least 2 options")
+        doc["poll_options"] = opts
+        doc["votes"] = {}
+    await db.posts.insert_one(doc)
+    return await serialize_post(doc, me["id"])
+
+
+@api.get("/posts/feed")
+async def get_feed(me=Depends(get_current_user)):
+    friend_ids = [me["id"]]
+    async for f in db.friendships.find({"users": me["id"]}):
+        for x in f["users"]:
+            if x != me["id"]:
+                friend_ids.append(x)
+    hidden = [h["post_id"] async for h in db.hidden.find({"user_id": me["id"]})]
+    blocked = me.get("blocked", [])
+    # public posts + friends posts, excluding hidden/blocked
+    query = {
+        "deleted_at": None,
+        "id": {"$nin": hidden},
+        "author_id": {"$nin": blocked},
+    }
+    cur = db.posts.find(query).sort("created_at", -1).limit(100)
+    out = []
+    async for p in cur:
+        author = await db.users.find_one({"id": p["author_id"], "deleted_at": None}, {"_id": 0})
+        if not author:
+            continue
+        if author.get("privacy") == "friends" and p["author_id"] not in friend_ids:
+            continue
+        out.append(await serialize_post(p, me["id"]))
+    return out
+
+
+@api.get("/posts/{post_id}")
+async def get_post(post_id: str, me=Depends(get_current_user)):
+    p = await db.posts.find_one({"id": post_id, "deleted_at": None})
+    if not p:
+        raise HTTPException(404, "Post not found")
+    return await serialize_post(p, me["id"])
+
+
+@api.post("/posts/{post_id}/react")
+async def react_post(post_id: str, body: ReactionBody, me=Depends(get_current_user)):
+    p = await db.posts.find_one({"id": post_id, "deleted_at": None})
+    if not p:
+        raise HTTPException(404, "Post not found")
+    key = f"reactions.{me['id']}"
+    if body.reaction:
+        await db.posts.update_one({"id": post_id}, {"$set": {key: body.reaction}})
+    else:
+        await db.posts.update_one({"id": post_id}, {"$unset": {key: ""}})
+    fresh = await db.posts.find_one({"id": post_id})
+    return await serialize_post(fresh, me["id"])
+
+
+@api.post("/posts/{post_id}/vote")
+async def vote_poll(post_id: str, option: int = Query(...), me=Depends(get_current_user)):
+    p = await db.posts.find_one({"id": post_id, "deleted_at": None, "type": "poll"})
+    if not p:
+        raise HTTPException(404, "Poll not found")
+    if option < 0 or option >= len(p.get("poll_options", [])):
+        raise HTTPException(400, "Invalid option")
+    await db.posts.update_one({"id": post_id}, {"$set": {f"votes.{me['id']}": option}})
+    fresh = await db.posts.find_one({"id": post_id})
+    return await serialize_post(fresh, me["id"])
+
+
+@api.delete("/posts/{post_id}")
+async def delete_post(post_id: str, me=Depends(get_current_user)):
+    p = await db.posts.find_one({"id": post_id})
+    if not p or p["author_id"] != me["id"]:
+        raise HTTPException(403, "Not allowed")
+    await db.posts.update_one({"id": post_id}, {"$set": {"deleted_at": now_iso()}})
+    return {"ok": True}
+
+
+@api.post("/posts/{post_id}/save")
+async def save_post(post_id: str, me=Depends(get_current_user)):
+    existing = await db.saved.find_one({"user_id": me["id"], "post_id": post_id})
+    if existing:
+        await db.saved.delete_one({"user_id": me["id"], "post_id": post_id})
+        return {"saved": False}
+    await db.saved.insert_one({"id": new_id(), "user_id": me["id"], "post_id": post_id, "created_at": now_iso()})
+    return {"saved": True}
+
+
+@api.get("/posts/saved/list")
+async def saved_list(me=Depends(get_current_user)):
+    ids = [s["post_id"] async for s in db.saved.find({"user_id": me["id"]}).sort("created_at", -1)]
+    out = []
+    for pid in ids:
+        p = await db.posts.find_one({"id": pid, "deleted_at": None})
+        if p:
+            out.append(await serialize_post(p, me["id"]))
+    return out
+
+
+@api.post("/posts/{post_id}/hide")
+async def hide_post(post_id: str, me=Depends(get_current_user)):
+    await db.hidden.update_one(
+        {"user_id": me["id"], "post_id": post_id},
+        {"$set": {"user_id": me["id"], "post_id": post_id, "created_at": now_iso()}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+# comments
+@api.get("/posts/{post_id}/comments")
+async def get_comments(post_id: str, me=Depends(get_current_user)):
+    cur = db.comments.find({"post_id": post_id, "deleted_at": None}).sort("created_at", 1)
+    out = []
+    async for c in cur:
+        out.append({
+            "id": c["id"],
+            "author": await enrich_author(c["author_id"]),
+            "text": c["text"],
+            "created_at": c["created_at"],
+            "is_mine": c["author_id"] == me["id"],
+        })
+    return out
+
+
+@api.post("/posts/{post_id}/comments")
+async def add_comment(post_id: str, body: CommentCreate, me=Depends(get_current_user)):
+    p = await db.posts.find_one({"id": post_id, "deleted_at": None})
+    if not p:
+        raise HTTPException(404, "Post not found")
+    doc = {
+        "id": new_id(), "post_id": post_id, "author_id": me["id"],
+        "text": body.text.strip(), "deleted_at": None, "created_at": now_iso(),
+    }
+    await db.comments.insert_one(doc)
+    return {
+        "id": doc["id"], "author": await enrich_author(me["id"]),
+        "text": doc["text"], "created_at": doc["created_at"], "is_mine": True,
+    }
+
+
+@api.delete("/comments/{comment_id}")
+async def delete_comment(comment_id: str, me=Depends(get_current_user)):
+    c = await db.comments.find_one({"id": comment_id})
+    if not c or c["author_id"] != me["id"]:
+        raise HTTPException(403, "Not allowed")
+    await db.comments.update_one({"id": comment_id}, {"$set": {"deleted_at": now_iso()}})
+    return {"ok": True}
+
+
+@api.post("/report")
+async def report(body: ReportBody, me=Depends(get_current_user)):
+    await db.reports.insert_one({
+        "id": new_id(), "reporter_id": me["id"], "target_type": body.target_type,
+        "target_id": body.target_id, "reason": body.reason, "status": "open",
+        "created_at": now_iso(),
+    })
+    return {"ok": True}
+
+
+# ----------------------------- stories -----------------------------
+@api.post("/stories")
+async def create_story(body: StoryCreate, me=Depends(get_current_user)):
+    doc = {
+        "id": new_id(),
+        "author_id": me["id"],
+        "type": body.type,
+        "image": body.image,
+        "text": body.text,
+        "bg_color": body.bg_color,
+        "viewers": [],
+        "deleted_at": None,
+        "created_at": now_iso(),
+        "expires_at": (now_dt() + timedelta(hours=24)).isoformat(),
+    }
+    await db.stories.insert_one(doc)
+    return {"ok": True, "id": doc["id"]}
+
+
+@api.get("/stories/feed")
+async def stories_feed(me=Depends(get_current_user)):
+    friend_ids = [me["id"]]
+    async for f in db.friendships.find({"users": me["id"]}):
+        for x in f["users"]:
+            if x != me["id"]:
+                friend_ids.append(x)
+    now = now_iso()
+    blocked = me.get("blocked", [])
+    cur = db.stories.find({
+        "deleted_at": None,
+        "expires_at": {"$gt": now},
+        "author_id": {"$in": friend_ids, "$nin": blocked},
+    }).sort("created_at", 1)
+    grouped = {}
+    async for s in cur:
+        aid = s["author_id"]
+        grouped.setdefault(aid, []).append(s)
+    result = []
+    for aid, items in grouped.items():
+        author = await enrich_author(aid)
+        if not author:
+            continue
+        all_viewed = all(me["id"] in s.get("viewers", []) for s in items)
+        result.append({
+            "author": author,
+            "is_mine": aid == me["id"],
+            "has_unseen": not all_viewed,
+            "count": len(items),
+            "stories": [{
+                "id": s["id"], "type": s["type"], "image": s.get("image"),
+                "text": s.get("text"), "bg_color": s.get("bg_color"),
+                "created_at": s["created_at"],
+                "viewed": me["id"] in s.get("viewers", []),
+            } for s in items],
+        })
+    # put self first, then unseen, then seen
+    result.sort(key=lambda r: (not r["is_mine"], not r["has_unseen"]))
+    return result
+
+
+@api.post("/stories/{story_id}/view")
+async def view_story(story_id: str, me=Depends(get_current_user)):
+    await db.stories.update_one({"id": story_id}, {"$addToSet": {"viewers": me["id"]}})
+    return {"ok": True}
+
+
+@api.delete("/stories/{story_id}")
+async def delete_story(story_id: str, me=Depends(get_current_user)):
+    s = await db.stories.find_one({"id": story_id})
+    if not s or s["author_id"] != me["id"]:
+        raise HTTPException(403, "Not allowed")
+    await db.stories.update_one({"id": story_id}, {"$set": {"deleted_at": now_iso()}})
+    return {"ok": True}
+
+
+# ----------------------------- chat -----------------------------
+def conv_id_for(a: str, b: str) -> str:
+    return "_".join(sorted([a, b]))
+
+
+@api.get("/chat/conversations")
+async def conversations(me=Depends(get_current_user)):
+    cur = db.conversations.find({"participants": me["id"]}).sort("updated_at", -1)
+    out = []
+    async for c in cur:
+        other = [x for x in c["participants"] if x != me["id"]][0]
+        u = await db.users.find_one({"id": other, "deleted_at": None}, {"_id": 0})
+        if not u:
+            continue
+        unread = await db.messages.count_documents({
+            "conversation_id": c["id"], "to_user": me["id"], "status": {"$ne": "read"}})
+        last_seen = u.get("last_seen")
+        online = False
+        if last_seen:
+            try:
+                online = (now_dt() - datetime.fromisoformat(last_seen)).total_seconds() < 120
+            except Exception:
+                online = False
+        out.append({
+            "id": c["id"],
+            "user": public_user(u),
+            "last_message": c.get("last_message"),
+            "last_type": c.get("last_type", "text"),
+            "updated_at": c.get("updated_at"),
+            "unread": unread,
+            "muted": me["id"] in c.get("muted_by", []),
+            "online": online,
+            "last_seen": last_seen,
+        })
+    return out
+
+
+@api.get("/chat/with/{user_id}")
+async def get_conversation(user_id: str, me=Depends(get_current_user)):
+    cid = conv_id_for(me["id"], user_id)
+    other = await db.users.find_one({"id": user_id, "deleted_at": None}, {"_id": 0})
+    if not other:
+        raise HTTPException(404, "User not found")
+    # mark delivered/read
+    await db.messages.update_many(
+        {"conversation_id": cid, "to_user": me["id"], "status": {"$ne": "read"}},
+        {"$set": {"status": "read"}})
+    cur = db.messages.find({"conversation_id": cid}).sort("created_at", 1).limit(200)
+    msgs = []
+    async for m in cur:
+        msgs.append({
+            "id": m["id"], "from_user": m["from_user"], "to_user": m["to_user"],
+            "type": m.get("type", "text"), "text": m.get("text"),
+            "media": m.get("media"), "duration": m.get("duration"),
+            "status": m.get("status", "sent"), "created_at": m["created_at"],
+            "mine": m["from_user"] == me["id"],
+        })
+    conv = await db.conversations.find_one({"id": cid})
+    last_seen = other.get("last_seen")
+    online = False
+    if last_seen:
+        try:
+            online = (now_dt() - datetime.fromisoformat(last_seen)).total_seconds() < 120
+        except Exception:
+            online = False
+    return {
+        "id": cid,
+        "user": public_user(other),
+        "messages": msgs,
+        "online": online,
+        "last_seen": last_seen,
+        "muted": conv and me["id"] in conv.get("muted_by", []),
+        "is_friend": await are_friends(me["id"], user_id),
+    }
+
+
+@api.post("/chat/send")
+async def send_message(body: MessageCreate, me=Depends(get_current_user)):
+    to_user = body.to_user
+    if not to_user and body.conversation_id:
+        parts = body.conversation_id.split("_")
+        to_user = [x for x in parts if x != me["id"]][0]
+    if not to_user:
+        raise HTTPException(400, "Recipient required")
+    cid = conv_id_for(me["id"], to_user)
+    msg = {
+        "id": new_id(), "conversation_id": cid, "from_user": me["id"], "to_user": to_user,
+        "type": body.type, "text": body.text, "media": body.media,
+        "duration": body.duration, "status": "delivered", "created_at": now_iso(),
+    }
+    await db.messages.insert_one(msg)
+    preview = body.text if body.type == "text" else ("📷 Photo" if body.type == "photo" else "🎤 Voice note")
+    await db.conversations.update_one(
+        {"id": cid},
+        {"$set": {
+            "id": cid, "participants": sorted([me["id"], to_user]),
+            "last_message": preview, "last_type": body.type, "updated_at": now_iso(),
+        }},
+        upsert=True,
+    )
+    return {
+        "id": msg["id"], "from_user": me["id"], "to_user": to_user,
+        "type": msg["type"], "text": msg["text"], "media": msg["media"],
+        "duration": msg["duration"], "status": "delivered", "created_at": msg["created_at"], "mine": True,
+    }
+
+
+@api.post("/chat/{conversation_id}/mute")
+async def mute_chat(conversation_id: str, me=Depends(get_current_user)):
+    conv = await db.conversations.find_one({"id": conversation_id})
+    muted = conv.get("muted_by", []) if conv else []
+    if me["id"] in muted:
+        await db.conversations.update_one({"id": conversation_id}, {"$pull": {"muted_by": me["id"]}})
+        return {"muted": False}
+    await db.conversations.update_one({"id": conversation_id}, {"$addToSet": {"muted_by": me["id"]}}, upsert=True)
+    return {"muted": True}
+
+
+@api.post("/chat/heartbeat")
+async def heartbeat(me=Depends(get_current_user)):
+    await db.users.update_one({"id": me["id"]}, {"$set": {"last_seen": now_iso()}})
+    return {"ok": True}
+
+
+# ----------------------------- verification -----------------------------
+@api.post("/verification")
+async def submit_verification(body: VerificationSubmit, me=Depends(get_current_user)):
+    existing = await db.verifications.find_one({"user_id": me["id"], "status": "pending"})
+    if existing:
+        raise HTTPException(400, "You already have a pending request")
+    if me.get("verified"):
+        raise HTTPException(400, "You are already verified")
+    await db.verifications.insert_one({
+        "id": new_id(), "user_id": me["id"], "document": body.document,
+        "full_legal_name": body.full_legal_name, "note": body.note,
+        "status": "pending", "created_at": now_iso(),
+    })
+    return {"ok": True}
+
+
+@api.get("/verification/me")
+async def my_verification(me=Depends(get_current_user)):
+    v = await db.verifications.find_one({"user_id": me["id"]}, {"_id": 0}, sort=[("created_at", -1)])
+    return v or {"status": "none"}
+
+
+# ----------------------------- help center -----------------------------
+@api.post("/tickets")
+async def create_ticket(body: TicketCreate, me=Depends(get_current_user)):
+    doc = {
+        "id": new_id(), "user_id": me["id"], "subject": body.subject,
+        "description": body.description, "screenshot": body.screenshot,
+        "status": "open", "reply": None, "created_at": now_iso(),
+    }
+    await db.tickets.insert_one(doc)
+    return {"ok": True, "id": doc["id"]}
+
+
+@api.get("/tickets/me")
+async def my_tickets(me=Depends(get_current_user)):
+    cur = db.tickets.find({"user_id": me["id"]}, {"_id": 0}).sort("created_at", -1)
+    return [t async for t in cur]
+
+
+# ----------------------------- app config (broadcast/force update) -----------------------------
+@api.get("/config")
+async def get_config(me=Depends(get_current_user)):
+    cfg = await db.config.find_one({"id": "app"}, {"_id": 0}) or {}
+    return {
+        "broadcast": cfg.get("broadcast"),
+        "force_update": cfg.get("force_update"),
+    }
+
+
+# ----------------------------- files -----------------------------
+@api.post("/upload")
+async def upload(file: UploadFile = File(...), me=Depends(get_current_user)):
+    ext = (file.filename or "bin").split(".")[-1].lower()
+    path = f"{storage_helper.APP_NAME}/uploads/{me['id']}/{new_id()}.{ext}"
+    data = await file.read()
+    ct = file.content_type or "application/octet-stream"
+    try:
+        await run_in_threadpool(storage_helper.put_object, path, data, ct)
+    except Exception as e:
+        logger.error(f"upload failed: {e}")
+        raise HTTPException(500, "Upload failed")
+    await db.files.insert_one({
+        "id": new_id(), "path": path, "owner_id": me["id"],
+        "content_type": ct, "created_at": now_iso(),
+    })
+    token = make_token(me["id"])
+    return {"path": path, "url": f"/api/files/{path}", "token": token}
+
+
+@api.get("/files/{path:path}")
+async def get_file(path: str, token: Optional[str] = Query(None), authorization: Optional[str] = Header(None)):
+    # auth via header or query token (web images)
+    ok = False
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            decode_token(authorization.split(" ", 1)[1])
+            ok = True
+        except Exception:
+            ok = False
+    if not ok and token:
+        try:
+            decode_token(token)
+            ok = True
+        except Exception:
+            ok = False
+    if not ok:
+        raise HTTPException(401, "Not authenticated")
+    meta = await db.files.find_one({"path": path})
+    if not meta:
+        raise HTTPException(404, "File not found")
+    try:
+        content, ct = await run_in_threadpool(storage_helper.get_object, path)
+    except Exception as e:
+        logger.error(f"download failed: {e}")
+        raise HTTPException(404, "File not found")
+    return Response(content=content, media_type=ct)
+
+
+# ----------------------------- admin -----------------------------
+@api.post("/admin/login")
+async def admin_login(body: AdminLogin):
+    if body.email.strip().lower() != ADMIN_EMAIL.lower() or body.password != ADMIN_PASSWORD:
+        raise HTTPException(400, "Invalid admin credentials")
+    token = make_token("admin", is_admin=True)
+    return {"token": token, "admin": True}
+
+
+@api.get("/admin/stats")
+async def admin_stats(_=Depends(require_admin)):
+    return {
+        "users": await db.users.count_documents({"deleted_at": None, "verified": True}),
+        "posts": await db.posts.count_documents({"deleted_at": None}),
+        "stories": await db.stories.count_documents({"deleted_at": None, "expires_at": {"$gt": now_iso()}}),
+        "pending_verifications": await db.verifications.count_documents({"status": "pending"}),
+        "open_tickets": await db.tickets.count_documents({"status": "open"}),
+        "open_reports": await db.reports.count_documents({"status": "open"}),
+    }
+
+
+@api.get("/admin/tickets")
+async def admin_tickets(_=Depends(require_admin)):
+    cur = db.tickets.find({}, {"_id": 0}).sort("created_at", -1)
+    out = []
+    async for t in cur:
+        u = await db.users.find_one({"id": t["user_id"]}, {"_id": 0})
+        t["user"] = public_user(u) if u else None
+        out.append(t)
+    return out
+
+
+@api.post("/admin/tickets/{ticket_id}/resolve")
+async def resolve_ticket(ticket_id: str, reply: str = Form(...), _=Depends(require_admin)):
+    await db.tickets.update_one({"id": ticket_id}, {"$set": {"status": "resolved", "reply": reply}})
+    return {"ok": True}
+
+
+@api.get("/admin/verifications")
+async def admin_verifications(_=Depends(require_admin)):
+    cur = db.verifications.find({}, {"_id": 0}).sort("created_at", -1)
+    out = []
+    async for v in cur:
+        u = await db.users.find_one({"id": v["user_id"]}, {"_id": 0})
+        v["user"] = public_user(u) if u else None
+        out.append(v)
+    return out
+
+
+@api.post("/admin/verifications/{vid}/approve")
+async def approve_verification(vid: str, _=Depends(require_admin)):
+    v = await db.verifications.find_one({"id": vid})
+    if not v:
+        raise HTTPException(404, "Not found")
+    await db.verifications.update_one({"id": vid}, {"$set": {"status": "approved"}})
+    await db.users.update_one({"id": v["user_id"]}, {"$set": {"verified": True}})
+    return {"ok": True}
+
+
+@api.post("/admin/verifications/{vid}/reject")
+async def reject_verification(vid: str, _=Depends(require_admin)):
+    await db.verifications.update_one({"id": vid}, {"$set": {"status": "rejected"}})
+    return {"ok": True}
+
+
+@api.get("/admin/reports")
+async def admin_reports(_=Depends(require_admin)):
+    cur = db.reports.find({"status": "open"}, {"_id": 0}).sort("created_at", -1)
+    out = []
+    async for r in cur:
+        target = None
+        if r["target_type"] == "post":
+            p = await db.posts.find_one({"id": r["target_id"]}, {"_id": 0})
+            if p:
+                target = {"type": "post", "text": p.get("text"), "image": p.get("image"), "author_id": p.get("author_id")}
+        elif r["target_type"] == "story":
+            s = await db.stories.find_one({"id": r["target_id"]}, {"_id": 0})
+            if s:
+                target = {"type": "story", "text": s.get("text"), "image": s.get("image")}
+        r["target"] = target
+        out.append(r)
+    return out
+
+
+@api.post("/admin/reports/{report_id}/delete-content")
+async def delete_reported(report_id: str, _=Depends(require_admin)):
+    r = await db.reports.find_one({"id": report_id})
+    if not r:
+        raise HTTPException(404, "Not found")
+    ts = now_iso()
+    if r["target_type"] == "post":
+        await db.posts.update_one({"id": r["target_id"]}, {"$set": {"deleted_at": ts}})
+    elif r["target_type"] == "story":
+        await db.stories.update_one({"id": r["target_id"]}, {"$set": {"deleted_at": ts}})
+    await db.reports.update_one({"id": report_id}, {"$set": {"status": "resolved"}})
+    return {"ok": True}
+
+
+@api.post("/admin/reports/{report_id}/dismiss")
+async def dismiss_report(report_id: str, _=Depends(require_admin)):
+    await db.reports.update_one({"id": report_id}, {"$set": {"status": "dismissed"}})
+    return {"ok": True}
+
+
+@api.get("/admin/users")
+async def admin_users(q: str = Query(""), _=Depends(require_admin)):
+    query = {"deleted_at": None}
+    if q.strip():
+        query["$or"] = [
+            {"username": {"$regex": q.strip(), "$options": "i"}},
+            {"full_name": {"$regex": q.strip(), "$options": "i"}},
+        ]
+    cur = db.users.find(query, {"_id": 0}).limit(50)
+    out = []
+    async for u in cur:
+        d = public_user(u)
+        d["suspended"] = u.get("suspended", False)
+        out.append(d)
+    return out
+
+
+@api.post("/admin/users/{user_id}/suspend")
+async def suspend_user(user_id: str, _=Depends(require_admin)):
+    u = await db.users.find_one({"id": user_id})
+    new_val = not u.get("suspended", False)
+    await db.users.update_one({"id": user_id}, {"$set": {"suspended": new_val}})
+    return {"suspended": new_val}
+
+
+@api.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, _=Depends(require_admin)):
+    ts = now_iso()
+    await db.users.update_one({"id": user_id}, {"$set": {"deleted_at": ts}})
+    await db.posts.update_many({"author_id": user_id}, {"$set": {"deleted_at": ts}})
+    return {"ok": True}
+
+
+@api.post("/admin/broadcast")
+async def set_broadcast(body: BroadcastBody, _=Depends(require_admin)):
+    await db.config.update_one(
+        {"id": "app"},
+        {"$set": {"id": "app", "broadcast": {"message": body.message, "active": body.active, "updated_at": now_iso()}}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api.post("/admin/force-update")
+async def set_force_update(body: ForceUpdateBody, _=Depends(require_admin)):
+    await db.config.update_one(
+        {"id": "app"},
+        {"$set": {"id": "app", "force_update": {
+            "active": body.active, "message": body.message, "min_version": body.min_version}}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api.get("/")
+async def root():
+    return {"message": "Glint API"}
+
+
+app.include_router(api)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+async def startup():
+    try:
+        await run_in_threadpool(storage_helper.init_storage)
+        logger.info("Storage initialized")
+    except Exception as e:
+        logger.error(f"Storage init failed: {e}")
+    await db.users.create_index("username")
+    await db.users.create_index("email")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    client.close()

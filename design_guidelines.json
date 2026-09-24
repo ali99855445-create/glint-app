@@ -1,0 +1,219 @@
+{
+  "app_name": "Glint",
+  "personality": "2 Material You / Expressive",
+  "personality_one_liner": "A vibrant, touchable, and highly expressive social space driven by warm tonal layers, bouncy interactions, and a fresh botanical palette—never feeling like a cold utility.",
+  "color": {
+    "surface": "#F7F7F4",
+    "onSurface": "#171715",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#383835",
+    "surfaceTertiary": "#EBEBE6",
+    "onSurfaceTertiary": "#5C5C59",
+    "surfaceInverse": "#1C1C1A",
+    "onSurfaceInverse": "#F7F7F4",
+    "brand": "#059669",
+    "brandPrimary": "#0FA968",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#F5B942",
+    "onBrandSecondary": "#1A1500",
+    "brandTertiary": "#E0F4EA",
+    "onBrandTertiary": "#064027",
+    "success": "#22C55E",
+    "onSuccess": "#FFFFFF",
+    "warning": "#F59E0B",
+    "onWarning": "#FFFFFF",
+    "error": "#EF4444",
+    "onError": "#FFFFFF",
+    "info": "#737373",
+    "onInfo": "#FFFFFF",
+    "border": "#E3E3DE",
+    "borderStrong": "#C2C2BB",
+    "divider": "#E3E3DE",
+    "muted": "#82827D",
+    "onBrand": "#FFFFFF",
+    
+    "dark": {
+      "surface": "#121211",
+      "onSurface": "#F0F0EB",
+      "surfaceSecondary": "#1C1C1A",
+      "onSurfaceSecondary": "#D6D6D2",
+      "surfaceTertiary": "#262624",
+      "onSurfaceTertiary": "#A3A39E",
+      "surfaceInverse": "#F0F0EB",
+      "onSurfaceInverse": "#121211",
+      "brand": "#059669",
+      "brandPrimary": "#15D182",
+      "onBrandPrimary": "#0A3F25",
+      "brandSecondary": "#F5B942",
+      "onBrandSecondary": "#3D2E00",
+      "brandTertiary": "#1B3B2B",
+      "onBrandTertiary": "#A8F0CE",
+      "success": "#22C55E",
+      "onSuccess": "#FFFFFF",
+      "warning": "#F59E0B",
+      "onWarning": "#FFFFFF",
+      "error": "#EF4444",
+      "onError": "#FFFFFF",
+      "info": "#A3A39E",
+      "onInfo": "#121211",
+      "border": "#2E2E2B",
+      "borderStrong": "#4A4A45",
+      "divider": "#2E2E2B",
+      "muted": "#7A7A75",
+      "onBrand": "#FFFFFF"
+    }
+  },
+  "typography": {
+    "displayFontFamily": "Outfit",
+    "textFontFamily": "Figtree",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous paddings around content to ensure a breathable, tactile layout. Avoid dense, edge-to-edge text. Components should feel modular.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use blur on bottom tab bar, floating story viewer actions, and the floating bottom action container on profiles.",
+      "Use heavy tint + blur for emoji reaction pills that hover over post images."
+    ],
+    "dont's": [
+      "Never blur body text cards or standard list rows. Avoid stacking multiple blurs."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Onboarding",
+      "purpose": "A multi-step, fluid registration flow utilizing bottom sheets and fullscreen photo uploads.",
+      "states": {
+        "loading": "Centered spinner over the current step.",
+        "empty": "N/A",
+        "error": "Inline red warning text below the specific input field + haptic bump."
+      },
+      "layout": "Fullscreen background image with a vertical gradient scrim (transparent to surfaceInverse). A sticky primary CTA button at the safe-area bottom. Use a top progress indicator. 'Skip' button as a ghost text link at the top right."
+    },
+    {
+      "name": "Home Feed",
+      "purpose": "The main social timeline blending quick updates (stories) with rich interactive posts and polls.",
+      "states": {
+        "loading": "Skeleton UI for story rings and post cards.",
+        "empty": "Illustration + 'Follow some friends to see their posts.' + 'Find Friends' CTA.",
+        "error": "Error message with 'Retry' button in the center."
+      },
+      "layout": "Top section is a horizontal scroll of Stories (avatar inside a gradient ring). Below, a vertical FlatList of posts. Post cards use `surfaceSecondary`, edge-to-edge images with `expo-image`, and floating glassmorphic reaction pills inside the image's bottom left. Use a sticky Glassmorphism header for the app logo and DM icon."
+    },
+    {
+      "name": "Story Viewer",
+      "purpose": "Immersive, ephemeral 24h content viewing with tap-to-advance mechanics.",
+      "states": {
+        "loading": "Spinner centered on the black background.",
+        "empty": "N/A",
+        "error": "Failed to load story banner."
+      },
+      "layout": "Full-bleed `expo-image` with top and bottom gradient scrims. Top scrim protects a segmented horizontal progress bar and sender avatar. Bottom scrim protects a 'Reply' input field and floating reaction emojis. Tap left 30% to go back, tap right 70% to advance."
+    },
+    {
+      "name": "Profile",
+      "purpose": "A personalized gallery of the user's content, featuring their cover photo and QR code sharing.",
+      "states": {
+        "loading": "Skeleton cover and grid.",
+        "empty": "Grid layout showing 'No posts yet'.",
+        "error": "Error fetching profile."
+      },
+      "layout": "Top half contains a full-width cover photo (`expo-image`) with a top gradient scrim protecting header actions. Avatar floats halfway over the cover's bottom edge. Segmented control (pill style) switches between Posts/Likes. Floating 'Share/QR' FAB at the bottom right. Profile stats use large Grotesk numbers."
+    },
+    {
+      "name": "Direct Messaging",
+      "purpose": "Private chat with 60fps optimized scrolling, voice notes, and media sharing.",
+      "states": {
+        "loading": "Spinner in the center.",
+        "empty": "Illustration + 'Say hi!' prompt.",
+        "error": "Banner at top 'No internet connection'."
+      },
+      "layout": "FlatList inverted for chat. Message bubbles use `md` or `lg` radius, with the directional tail corner sharp (`radius: 0`). Sender bubbles are `brandPrimary`, receiver bubbles are `surfaceSecondary`. Input field at the bottom is sticky, wrapped in `surfaceTertiary`, with a right-aligned Send/Voice action icon."
+    },
+    {
+      "name": "Admin Dashboard",
+      "purpose": "Command center for handling reports, verifications (Golden Tick), and broadcasting.",
+      "states": {
+        "loading": "Skeleton list rows.",
+        "empty": "No pending tickets or requests.",
+        "error": "Failed to load admin stats."
+      },
+      "layout": "Utility-focused but maintains the expressive vibe. Use grid tiles at the top for quick stats (Users, Tickets). List rows for pending actions, featuring `brandTertiary` tinted icon containers on the left, primary action pills on the right."
+    }
+  ],
+  "images": {
+    "onboarding_bg": {
+      "url": "https://images.unsplash.com/photo-1578662996442-48f60103fc96?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTF8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGRhcmslMjB0ZXh0dXJlZCUyMGJhY2tncm91bmR8ZW58MHx8fHwxNzkwMjcxMjM2fDA&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTF8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGRhcmslMjB0ZXh0dXJlZCUyMGJhY2tncm91bmR8ZW58MHx8fHwxNzkwMjcxMjM2fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Dark textured abstract background"
+    },
+    "default_cover": {
+      "url": "https://images.unsplash.com/photo-1511081692775-05d0f180a065?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHwxfHxhZXN0aGV0aWMlMjBjYWZlJTIwaW50ZXJpb3J8ZW58MHx8fHwxNzkwMjcxMjM2fDA&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.pexels.com/photos/30915537/pexels-photo-30915537.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Aesthetic cafe interior"
+    },
+    "avatar_placeholder_1": {
+      "url": "https://images.unsplash.com/photo-1726140871959-89036cd0d6a3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwxfHx5b3VuZyUyMHBlcnNvbiUyMHBvcnRyYWl0JTIwb3V0ZG9vcnN8ZW58MHx8fHwxNzkwMjcxMjM2fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Young person outdoors"
+    },
+    "avatar_placeholder_2": {
+      "url": "https://images.unsplash.com/photo-1770914701397-74ec4efabbd2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwyfHx5b3VuZyUyMHBlcnNvbiUyMHBvcnRyYWl0JTIwb3V0ZG9vcnN8ZW58MHx8fHwxNzkwMjcxMjM2fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Young person in red jersey"
+    }
+  },
+  "haptics": {
+    "tab_press": "light",
+    "like_reaction": "medium",
+    "story_advance": "selection",
+    "send_message": "light",
+    "pull_to_refresh": "medium",
+    "golden_tick_verify": "success",
+    "error_state": "error"
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the color palette provided—do NOT use blue, indigo, purple, or default Material colors anywhere in the app. The primary theme uses a fresh Mint/Emerald Green with a Golden Amber accent.",
+    "Ensure full Light/Dark mode toggling support throughout the app by accessing the 'dark' nested object inside the color map when dark mode is active.",
+    "Implement the 'Golden Tick' using the 'brandSecondary' (Golden Amber) color rather than a traditional blue checkmark.",
+    "For the Direct Messaging screen, ensure FlatList is heavily optimized (memoized components) to hit 60fps during rapid scrolling.",
+    "Use a vertical gradient scrim (transparent to surfaceInverse) any time text is placed over an image (like Stories, Onboarding backgrounds, and Profile Cover).",
+    "Avoid harsh shadows; use tonal separation (surface vs surfaceSecondary) to establish depth, combined with rounded bubbly cards.",
+    "Emoji reactions (Like, Love, Haha, Wow, Sad, Angry) should pop up fluidly and utilize glassmorphism (surfaceTertiary + blur) when floating over post content.",
+    "Include the haptics mapped in the design JSON; bind them to button presses and feed interactions."
+  ]
+}
