@@ -31,8 +31,8 @@ export default function ChatList() {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <Text style={styles.title}>Messages</Text>
-        <Pressable onPress={() => router.push("/(tabs)/friends")} style={styles.newBtn} testID="chat-new">
-          <Icon name="create-outline" size={20} color={colors.onSurface} />
+        <Pressable onPress={() => router.push("/chat/new-group")} style={styles.newBtn} testID="chat-new-group">
+          <Icon name="people" size={20} color={colors.onSurface} />
         </Pressable>
       </View>
 
@@ -44,14 +44,29 @@ export default function ChatList() {
           keyExtractor={(c) => c.id}
           contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: bottomChrome + 24 }}
           renderItem={({ item }) => (
-            <Pressable style={styles.row} onPress={() => router.push(`/chat/${item.user.id}`)} testID={`convo-${item.user.username}`}>
+            <Pressable style={styles.row} onPress={() => router.push(item.is_group ? `/chat/group/${item.id}` : `/chat/${item.user.id}`)} testID={item.is_group ? `group-${item.id}` : `convo-${item.user.username}`}>
               <View>
-                <Avatar uri={item.user.avatar} name={item.user.full_name} size={56} />
-                {item.online && <View style={styles.onlineDot} />}
+                {item.is_group ? (
+                  <View style={styles.groupAvatar}>
+                    <Icon name="people" size={26} color={colors.onBrandPrimary} />
+                  </View>
+                ) : (
+                  <>
+                    <Avatar uri={item.user.avatar} name={item.user.full_name} size={56} />
+                    {item.online && <View style={styles.onlineDot} />}
+                  </>
+                )}
               </View>
               <View style={{ flex: 1 }}>
                 <View style={styles.rowTop}>
-                  <UserName name={item.user.full_name} verified={item.user.verified} size={15} />
+                  {item.is_group ? (
+                    <View style={styles.groupNameRow}>
+                      <Text style={styles.groupName} numberOfLines={1}>{item.name}</Text>
+                      <Text style={styles.memberCount}>· {item.member_count}</Text>
+                    </View>
+                  ) : (
+                    <UserName name={item.user.full_name} verified={item.user.verified} size={15} />
+                  )}
                   <Text style={styles.time}>{timeAgo(item.updated_at)}</Text>
                 </View>
                 <View style={styles.rowBottom}>
@@ -86,6 +101,10 @@ const useStyles = makeStyles((c) => ({
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   row: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingVertical: spacing.md },
   onlineDot: { position: "absolute", bottom: 2, right: 2, width: 14, height: 14, borderRadius: 7, backgroundColor: c.success, borderWidth: 2, borderColor: c.surface },
+  groupAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: c.brandPrimary, alignItems: "center", justifyContent: "center" },
+  groupNameRow: { flex: 1, flexDirection: "row", alignItems: "center", gap: 4 },
+  groupName: { color: c.onSurface, fontFamily: fonts.semibold, fontSize: 15, flexShrink: 1 },
+  memberCount: { color: c.muted, fontFamily: fonts.text, fontSize: 13 },
   rowTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   time: { color: c.muted, fontFamily: fonts.text, fontSize: 12 },
   rowBottom: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 3 },

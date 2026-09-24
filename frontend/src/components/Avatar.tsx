@@ -1,7 +1,8 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { View, Text, StyleSheet } from "react-native";
+import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, withSequence, Easing } from "react-native-reanimated";
 import { Image } from "expo-image";
-import { useTheme, fonts, radius } from "@/src/theme";
+import { useTheme, fonts } from "@/src/theme";
 import { fileUrl } from "@/src/api/client";
 import { Icon } from "./Icon";
 
@@ -33,19 +34,35 @@ export function Avatar({ uri, name, size = 44, ring }: { uri?: string | null; na
 
 export function GoldenTick({ size = 15 }: { size?: number }) {
   const { colors } = useTheme();
+  const glow = useSharedValue(0);
+  useEffect(() => {
+    glow.value = withRepeat(withSequence(withTiming(1, { duration: 1100, easing: Easing.inOut(Easing.ease) }), withTiming(0, { duration: 1100, easing: Easing.inOut(Easing.ease) })), -1, false);
+  }, [glow]);
+  const glowStyle = useAnimatedStyle(() => ({
+    opacity: 0.25 + glow.value * 0.55,
+    transform: [{ scale: 1 + glow.value * 0.25 }],
+  }));
+
   return (
-    <View
-      testID="golden-tick"
-      style={{
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-        backgroundColor: colors.brandSecondary,
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      <Icon name="checkmark" size={size * 0.72} color={colors.onBrandSecondary} />
+    <View testID="golden-tick" style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+      <Animated.View
+        style={[
+          { position: "absolute", width: size, height: size, borderRadius: size / 2, backgroundColor: colors.brandSecondary },
+          glowStyle,
+        ]}
+      />
+      <View
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: colors.brandSecondary,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Icon name="checkmark" size={size * 0.72} color={colors.onBrandSecondary} />
+      </View>
     </View>
   );
 }

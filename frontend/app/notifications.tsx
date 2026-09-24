@@ -14,6 +14,7 @@ const TYPE_ICON: Record<string, { icon: any; colorKey: string }> = {
   comment: { icon: "chatbubble", colorKey: "brandPrimary" },
   friend_request: { icon: "person-add", colorKey: "brandSecondary" },
   friend_accept: { icon: "people", colorKey: "success" },
+  spark: { icon: "sparkles", colorKey: "brandSecondary" },
   message: { icon: "paper-plane", colorKey: "brandPrimary" },
 };
 
@@ -46,6 +47,7 @@ export default function Notifications() {
     switch (n.type) {
       case "reaction":
       case "comment":
+      case "spark":
         if (n.ref_id) return router.push(`/post/${n.ref_id}`);
         break;
       case "friend_request":

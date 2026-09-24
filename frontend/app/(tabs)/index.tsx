@@ -9,13 +9,33 @@ import { PostCard } from "@/src/components/PostCard";
 import { StoryBar } from "@/src/components/StoryBar";
 import { Icon } from "@/src/components/Icon";
 import { Button } from "@/src/components/ui";
+import { useToast } from "@/src/components/Toast";
 import { usesNativeTabs } from "@/src/navigation";
+
+function useCountdown(target?: string | null) {
+  const [label, setLabel] = React.useState("");
+  React.useEffect(() => {
+    if (!target) return;
+    const tick = () => {
+      const diff = Math.max(0, new Date(target).getTime() - Date.now());
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setLabel(h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [target]);
+  return label;
+}
 
 export default function Home() {
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const toast = useToast();
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
 
   const feed = useQuery({ queryKey: ["feed"], queryFn: () => api.get("/posts/feed") });
@@ -23,9 +43,22 @@ export default function Home() {
   const config = useQuery({ queryKey: ["config"], queryFn: () => api.get("/config") });
   const unread = useQuery({ queryKey: ["unread-count"], queryFn: () => api.get("/notifications/unread-count"), refetchInterval: 15000 });
   const unreadCount = unread.data?.count || 0;
+  const golden = useQuery({ queryKey: ["golden-status"], queryFn: () => api.get("/golden/status"), refetchInterval: 60000 });
+
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const r = await api.post("/spark/claim-daily");
+        if (r.claimed) toast.show(`+${r.reward} Sparks claimed! 🪙`, "success");
+      } catch {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const refreshing = feed.isRefetching || stories.isRefetching;
   const broadcast = config.data?.broadcast;
+  const gActive = golden.data?.active;
+  const countdown = useCountdown(gActive ? golden.data?.ends_at : golden.data?.next_start);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -56,6 +89,19 @@ export default function Home() {
           <Text style={styles.broadcastText}>{broadcast.message}</Text>
         </View>
       )}
+
+      <Pressable style={[styles.golden, gActive && styles.goldenActive]} onPress={() => router.push("/golden")} testID="golden-hour-banner">
+        <Icon name="sparkles" size={20} color={gActive ? colors.onBrandSecondary : colors.brandSecondary} />
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.goldenTitle, gActive && { color: colors.onBrandSecondary }]}>
+            {gActive ? "Golden Hour is LIVE ✨" : "Golden Hour"}
+          </Text>
+          <Text style={[styles.goldenSub, gActive && { color: colors.onBrandSecondary }]}>
+            {gActive ? `Post now for the Golden Feed · ends in ${countdown}` : `Starts in ${countdown} · tap to see the glow`}
+          </Text>
+        </View>
+        <Icon name="chevron-forward" size={18} color={gActive ? colors.onBrandSecondary : colors.brandSecondary} />
+      </Pressable>
 
       {feed.isLoading ? (
         <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} size="large" /></View>
@@ -97,6 +143,10 @@ const useStyles = makeStyles((c) => ({
   badgeText: { color: c.onError, fontFamily: fonts.semibold, fontSize: 10 },
   broadcast: { flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: c.brandSecondary, marginHorizontal: spacing.lg, marginBottom: spacing.sm, paddingVertical: spacing.md, paddingHorizontal: spacing.lg, borderRadius: radius.md },
   broadcastText: { flex: 1, color: c.onBrandSecondary, fontFamily: fonts.medium, fontSize: 14 },
+  golden: { flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: c.brandTertiary, borderWidth: 1, borderColor: c.brandSecondary, marginHorizontal: spacing.lg, marginBottom: spacing.sm, paddingVertical: spacing.md, paddingHorizontal: spacing.lg, borderRadius: radius.md },
+  goldenActive: { backgroundColor: c.brandSecondary, borderColor: c.brandSecondary },
+  goldenTitle: { color: c.onSurface, fontFamily: fonts.semibold, fontSize: 15 },
+  goldenSub: { color: c.muted, fontFamily: fonts.text, fontSize: 12, marginTop: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   empty: { alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.xl, paddingTop: spacing["3xl"] },
   emptyTitle: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 20 },

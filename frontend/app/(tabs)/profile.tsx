@@ -85,6 +85,11 @@ export default function ProfileTab() {
             <Text style={styles.statNum}>{data?.counts?.friends ?? 0}</Text>
             <Text style={styles.statLabel}>Friends</Text>
           </View>
+          <View style={styles.statDivider} />
+          <Pressable style={styles.stat} onPress={() => router.push("/inner-circle")} testID="profile-sparks">
+            <Text style={[styles.statNum, { color: colors.brandSecondary }]}>🪙 {user?.sparks ?? 0}</Text>
+            <Text style={styles.statLabel}>Sparks</Text>
+          </Pressable>
         </View>
 
         {!data?.verified && (

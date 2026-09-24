@@ -28,6 +28,10 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 ADMIN_EMAIL = os.environ['ADMIN_EMAIL']
 ADMIN_PASSWORD = os.environ['ADMIN_PASSWORD']
+ADMIN_CREDS = [
+    (ADMIN_EMAIL, ADMIN_PASSWORD),
+    (os.environ.get('ADMIN_EMAIL_2', ''), os.environ.get('ADMIN_PASSWORD_2', '')),
+]
 
 app = FastAPI()
 api = APIRouter(prefix="/api")
@@ -139,6 +143,34 @@ async def get_user_name(uid: str) -> str:
     return u.get("full_name", "Someone") if u else "Someone"
 
 
+GOLDEN_HOUR_UTC = 18  # daily 18:00-19:00 UTC Golden Hour
+
+
+def golden_window():
+    now = now_dt()
+    start = now.replace(hour=GOLDEN_HOUR_UTC, minute=0, second=0, microsecond=0)
+    end = start + timedelta(hours=1)
+    active = start <= now < end
+    if now < start:
+        next_start = start
+    elif now >= end:
+        next_start = start + timedelta(days=1)
+    else:
+        next_start = start
+    return active, start, end, next_start
+
+
+async def can_view_post(post: dict, author: dict, viewer_id: str, friend_ids: set) -> bool:
+    aud = post.get("audience", "public")
+    if author["id"] == viewer_id:
+        return True
+    if aud == "inner":
+        return viewer_id in author.get("inner_circle", [])
+    if aud == "friends" or author.get("privacy") == "friends":
+        return post["author_id"] in friend_ids
+    return True
+
+
 async def enrich_author(user_id: str) -> dict:
     u = await db.users.find_one({"id": user_id}, {"_id": 0})
     return public_user(u)
@@ -187,6 +219,22 @@ class PostCreate(BaseModel):
     text: Optional[str] = ""
     image: Optional[str] = None
     poll_options: Optional[List[str]] = None
+    audience: str = "public"  # public | friends | inner
+
+
+class StoryCreate(BaseModel):
+    type: str  # photo | text | voice
+    image: Optional[str] = None
+    text: Optional[str] = None
+    bg_color: Optional[str] = None
+    media: Optional[str] = None
+    duration: Optional[float] = None
+    audience: str = "friends"  # friends | inner
+
+
+class CaptionRequest(BaseModel):
+    topic: str
+    tone: str = "witty"
 
 
 class CommentCreate(BaseModel):
@@ -203,13 +251,6 @@ class ReportBody(BaseModel):
     reason: str
 
 
-class StoryCreate(BaseModel):
-    type: str  # photo | text
-    image: Optional[str] = None
-    text: Optional[str] = None
-    bg_color: Optional[str] = None
-
-
 class MessageCreate(BaseModel):
     conversation_id: Optional[str] = None
     to_user: Optional[str] = None
@@ -217,6 +258,12 @@ class MessageCreate(BaseModel):
     text: Optional[str] = None
     media: Optional[str] = None
     duration: Optional[float] = None
+
+
+class GroupCreate(BaseModel):
+    name: str
+    member_ids: List[str]
+    avatar: Optional[str] = None
 
 
 class VerificationSubmit(BaseModel):
@@ -279,6 +326,9 @@ async def register_init(body: RegisterInit):
         "location": None,
         "verified": False,  # email/phone OTP verified
         "golden_tick": False,
+        "sparks": 50,
+        "inner_circle": [],
+        "last_spark_bonus": None,
         "otp": code,
         "otp_purpose": "signup",
         "privacy": "public",
@@ -373,6 +423,8 @@ async def get_me(me=Depends(get_current_user)):
     data.update({
         "email": me.get("email"),
         "phone": me.get("phone"),
+        "sparks": me.get("sparks", 0),
+        "inner_circle_count": len(me.get("inner_circle", [])),
         "counts": {"saved": saved, "friends": friends, "posts": posts},
     })
     return data
@@ -433,6 +485,7 @@ async def get_user(username: str, me=Depends(get_current_user)):
     data["friend_status"] = fr_status
     data["is_me"] = u["id"] == me["id"]
     data["is_blocked"] = u["id"] in set(me.get("blocked", []))
+    data["is_inner"] = u["id"] in me.get("inner_circle", [])
     can_view = (u.get("privacy") != "friends") or friend or data["is_me"]
     data["can_view"] = can_view
     data["counts"] = {
@@ -608,6 +661,10 @@ async def serialize_post(p: dict, me_id: str) -> dict:
         "saved": saved,
         "comment_count": comment_count,
         "is_mine": p["author_id"] == me_id,
+        "sparks": p.get("sparks", 0),
+        "i_sparked": me_id in p.get("sparkers", []),
+        "golden": p.get("golden", False),
+        "audience": p.get("audience", "public"),
     }
     if p.get("type") == "poll":
         votes = p.get("votes", {})  # {user_id: option_index}
@@ -635,12 +692,17 @@ async def feed_posts_for_author(author_id: str, me_id: str):
 
 @api.post("/posts")
 async def create_post(body: PostCreate, me=Depends(get_current_user)):
+    active, _, _, _ = golden_window()
     doc = {
         "id": new_id(),
         "author_id": me["id"],
         "type": body.type,
         "text": (body.text or "").strip(),
         "image": body.image,
+        "audience": body.audience if body.audience in ("public", "friends", "inner") else "public",
+        "golden": active,
+        "sparks": 0,
+        "sparkers": [],
         "reactions": {},
         "deleted_at": None,
         "created_at": now_iso(),
@@ -672,14 +734,47 @@ async def get_feed(me=Depends(get_current_user)):
     }
     cur = db.posts.find(query).sort("created_at", -1).limit(100)
     out = []
+    fset = set(friend_ids)
     async for p in cur:
         author = await db.users.find_one({"id": p["author_id"], "deleted_at": None}, {"_id": 0})
         if not author:
             continue
-        if author.get("privacy") == "friends" and p["author_id"] not in friend_ids:
+        if not await can_view_post(p, author, me["id"], fset):
             continue
         out.append(await serialize_post(p, me["id"]))
     return out
+
+
+@api.get("/posts/golden")
+async def golden_feed(me=Depends(get_current_user)):
+    friend_ids = {me["id"]}
+    async for f in db.friendships.find({"users": me["id"]}):
+        for x in f["users"]:
+            friend_ids.add(x)
+    since = (now_dt() - timedelta(hours=24)).isoformat()
+    hidden = [h["post_id"] async for h in db.hidden.find({"user_id": me["id"]})]
+    cur = db.posts.find({
+        "deleted_at": None, "golden": True, "created_at": {"$gt": since},
+        "id": {"$nin": hidden}, "author_id": {"$nin": me.get("blocked", [])},
+    }).limit(100)
+    out = []
+    async for p in cur:
+        author = await db.users.find_one({"id": p["author_id"], "deleted_at": None}, {"_id": 0})
+        if not author or not await can_view_post(p, author, me["id"], friend_ids):
+            continue
+        out.append(await serialize_post(p, me["id"]))
+    out.sort(key=lambda x: x["total_reactions"] + x["sparks"], reverse=True)
+    return out
+
+
+@api.get("/golden/status")
+async def golden_status(me=Depends(get_current_user)):
+    active, start, end, next_start = golden_window()
+    return {
+        "active": active,
+        "ends_at": end.isoformat() if active else None,
+        "next_start": next_start.isoformat(),
+    }
 
 
 @api.get("/posts/{post_id}")
@@ -810,6 +905,96 @@ async def report(body: ReportBody, me=Depends(get_current_user)):
     return {"ok": True}
 
 
+# ----------------------------- glint spark (tipping) -----------------------------
+@api.get("/spark/balance")
+async def spark_balance(me=Depends(get_current_user)):
+    today = now_dt().date().isoformat()
+    return {"balance": me.get("sparks", 0), "can_claim": me.get("last_spark_bonus") != today}
+
+
+@api.post("/spark/claim-daily")
+async def claim_daily_spark(me=Depends(get_current_user)):
+    today = now_dt().date().isoformat()
+    if me.get("last_spark_bonus") == today:
+        return {"claimed": False, "balance": me.get("sparks", 0)}
+    new_balance = me.get("sparks", 0) + 10
+    await db.users.update_one({"id": me["id"]}, {"$set": {"sparks": new_balance, "last_spark_bonus": today}})
+    return {"claimed": True, "balance": new_balance, "reward": 10}
+
+
+@api.post("/posts/{post_id}/spark")
+async def spark_post(post_id: str, me=Depends(get_current_user)):
+    p = await db.posts.find_one({"id": post_id, "deleted_at": None})
+    if not p:
+        raise HTTPException(404, "Post not found")
+    if p["author_id"] == me["id"]:
+        raise HTTPException(400, "You can't spark your own post")
+    if me["id"] in p.get("sparkers", []):
+        raise HTTPException(400, "Already sparked this post")
+    if me.get("sparks", 0) < 1:
+        raise HTTPException(400, "Not enough Sparks. Claim your daily bonus!")
+    await db.users.update_one({"id": me["id"]}, {"$inc": {"sparks": -1}})
+    await db.users.update_one({"id": p["author_id"]}, {"$inc": {"sparks": 1}})
+    await db.posts.update_one({"id": post_id}, {"$inc": {"sparks": 1}, "$addToSet": {"sparkers": me["id"]}})
+    await notify(p["author_id"], me["id"], "spark", post_id, f"{me['full_name']} sent you a Spark 🪙")
+    return {"ok": True, "sparks": p.get("sparks", 0) + 1, "balance": me.get("sparks", 0) - 1}
+
+
+# ----------------------------- inner circle -----------------------------
+@api.get("/inner-circle")
+async def get_inner_circle(me=Depends(get_current_user)):
+    out = []
+    for uid in me.get("inner_circle", []):
+        u = await db.users.find_one({"id": uid, "deleted_at": None}, {"_id": 0})
+        if u:
+            out.append(public_user(u))
+    return out
+
+
+@api.post("/inner-circle/{user_id}")
+async def add_inner_circle(user_id: str, me=Depends(get_current_user)):
+    circle = me.get("inner_circle", [])
+    if user_id in circle:
+        return {"ok": True}
+    if len(circle) >= 10:
+        raise HTTPException(400, "Inner Circle is full (max 10)")
+    if not await are_friends(me["id"], user_id):
+        raise HTTPException(400, "Only friends can be added to your Inner Circle")
+    await db.users.update_one({"id": me["id"]}, {"$addToSet": {"inner_circle": user_id}})
+    return {"ok": True}
+
+
+@api.delete("/inner-circle/{user_id}")
+async def remove_inner_circle(user_id: str, me=Depends(get_current_user)):
+    await db.users.update_one({"id": me["id"]}, {"$pull": {"inner_circle": user_id}})
+    return {"ok": True}
+
+
+# ----------------------------- AI caption studio -----------------------------
+@api.post("/ai/captions")
+async def ai_captions(body: CaptionRequest, me=Depends(get_current_user)):
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    key = os.environ.get("EMERGENT_LLM_KEY")
+    if not key:
+        raise HTTPException(500, "AI not configured")
+    tone = body.tone.strip() or "witty"
+    system = (
+        "You are Glint's caption studio. Given a topic and a tone, write exactly 4 short, "
+        "punchy social media captions (max 120 chars each). Return ONLY the captions, one per "
+        "line, no numbering, no quotes, no emojis unless they fit naturally."
+    )
+    chat = LlmChat(api_key=key, session_id=f"cap-{me['id']}", system_message=system).with_model("openai", "gpt-5.4-mini")
+    prompt = f"Topic: {body.topic.strip()}\nTone: {tone}\nWrite 4 {tone} captions."
+    try:
+        reply = await chat.send_message(UserMessage(text=prompt))
+    except Exception as e:
+        logger.error(f"AI captions failed: {e}")
+        raise HTTPException(502, "Could not generate captions right now")
+    lines = [l.strip(" -•\t\"'") for l in str(reply).split("\n") if l.strip()]
+    suggestions = [l for l in lines if len(l) > 1][:4]
+    return {"suggestions": suggestions}
+
+
 # ----------------------------- stories -----------------------------
 @api.post("/stories")
 async def create_story(body: StoryCreate, me=Depends(get_current_user)):
@@ -820,6 +1005,9 @@ async def create_story(body: StoryCreate, me=Depends(get_current_user)):
         "image": body.image,
         "text": body.text,
         "bg_color": body.bg_color,
+        "media": body.media,
+        "duration": body.duration,
+        "audience": body.audience if body.audience in ("friends", "inner") else "friends",
         "viewers": [],
         "deleted_at": None,
         "created_at": now_iso(),
@@ -844,8 +1032,17 @@ async def stories_feed(me=Depends(get_current_user)):
         "author_id": {"$in": friend_ids, "$nin": blocked},
     }).sort("created_at", 1)
     grouped = {}
+    authors_cache = {}
     async for s in cur:
         aid = s["author_id"]
+        if aid not in authors_cache:
+            authors_cache[aid] = await db.users.find_one({"id": aid}, {"_id": 0})
+        au = authors_cache[aid]
+        if not au:
+            continue
+        # inner-audience stories only visible to the author's inner circle
+        if s.get("audience") == "inner" and aid != me["id"] and me["id"] not in au.get("inner_circle", []):
+            continue
         grouped.setdefault(aid, []).append(s)
     result = []
     for aid, items in grouped.items():
@@ -853,19 +1050,23 @@ async def stories_feed(me=Depends(get_current_user)):
         if not author:
             continue
         all_viewed = all(me["id"] in s.get("viewers", []) for s in items)
+        au = authors_cache.get(aid) or {}
+        is_inner = me["id"] in au.get("inner_circle", []) and aid != me["id"]
         result.append({
             "author": author,
             "is_mine": aid == me["id"],
+            "is_inner": is_inner,
             "has_unseen": not all_viewed,
             "count": len(items),
             "stories": [{
                 "id": s["id"], "type": s["type"], "image": s.get("image"),
                 "text": s.get("text"), "bg_color": s.get("bg_color"),
+                "media": s.get("media"), "duration": s.get("duration"),
+                "audience": s.get("audience", "friends"),
                 "created_at": s["created_at"],
                 "viewed": me["id"] in s.get("viewers", []),
             } for s in items],
         })
-    # put self first, then unseen, then seen
     result.sort(key=lambda r: (not r["is_mine"], not r["has_unseen"]))
     return result
 
@@ -874,6 +1075,21 @@ async def stories_feed(me=Depends(get_current_user)):
 async def view_story(story_id: str, me=Depends(get_current_user)):
     await db.stories.update_one({"id": story_id}, {"$addToSet": {"viewers": me["id"]}})
     return {"ok": True}
+
+
+@api.get("/stories/{story_id}/viewers")
+async def story_viewers(story_id: str, me=Depends(get_current_user)):
+    s = await db.stories.find_one({"id": story_id})
+    if not s or s["author_id"] != me["id"]:
+        raise HTTPException(403, "Not allowed")
+    out = []
+    for uid in reversed(s.get("viewers", [])):
+        if uid == me["id"]:
+            continue
+        u = await db.users.find_one({"id": uid, "deleted_at": None}, {"_id": 0})
+        if u:
+            out.append(public_user(u))
+    return {"count": len(out), "viewers": out}
 
 
 @api.delete("/stories/{story_id}")
@@ -895,6 +1111,29 @@ async def conversations(me=Depends(get_current_user)):
     cur = db.conversations.find({"participants": me["id"]}).sort("updated_at", -1)
     out = []
     async for c in cur:
+        if c.get("is_group"):
+            unread = await db.messages.count_documents({
+                "conversation_id": c["id"], "from_user": {"$ne": me["id"]}, "read_by": {"$ne": me["id"]}})
+            members = []
+            for uid in c.get("participants", [])[:4]:
+                mu = await db.users.find_one({"id": uid}, {"_id": 0})
+                if mu:
+                    members.append(public_user(mu))
+            out.append({
+                "id": c["id"],
+                "is_group": True,
+                "name": c.get("name"),
+                "avatar": c.get("avatar"),
+                "members": members,
+                "member_count": len(c.get("participants", [])),
+                "last_message": c.get("last_message"),
+                "last_type": c.get("last_type", "text"),
+                "updated_at": c.get("updated_at"),
+                "unread": unread,
+                "muted": me["id"] in c.get("muted_by", []),
+                "online": False,
+            })
+            continue
         other = [x for x in c["participants"] if x != me["id"]][0]
         u = await db.users.find_one({"id": other, "deleted_at": None}, {"_id": 0})
         if not u:
@@ -910,6 +1149,7 @@ async def conversations(me=Depends(get_current_user)):
                 online = False
         out.append({
             "id": c["id"],
+            "is_group": False,
             "user": public_user(u),
             "last_message": c.get("last_message"),
             "last_type": c.get("last_type", "text"),
@@ -920,6 +1160,55 @@ async def conversations(me=Depends(get_current_user)):
             "last_seen": last_seen,
         })
     return out
+
+
+@api.post("/chat/groups")
+async def create_group(body: GroupCreate, me=Depends(get_current_user)):
+    if not body.name.strip():
+        raise HTTPException(400, "Group name required")
+    members = list({*body.member_ids, me["id"]})
+    if len(members) < 3:
+        raise HTTPException(400, "Add at least 2 friends to create a group")
+    gid = new_id()
+    await db.conversations.insert_one({
+        "id": gid, "is_group": True, "name": body.name.strip(), "avatar": body.avatar,
+        "participants": members, "created_by": me["id"], "muted_by": [],
+        "last_message": f"{me['full_name']} created the group", "last_type": "system",
+        "updated_at": now_iso(), "created_at": now_iso(),
+    })
+    return {"id": gid}
+
+
+@api.get("/chat/group/{group_id}")
+async def get_group(group_id: str, me=Depends(get_current_user)):
+    conv = await db.conversations.find_one({"id": group_id, "is_group": True})
+    if not conv or me["id"] not in conv.get("participants", []):
+        raise HTTPException(404, "Group not found")
+    await db.messages.update_many(
+        {"conversation_id": group_id, "from_user": {"$ne": me["id"]}, "read_by": {"$ne": me["id"]}},
+        {"$addToSet": {"read_by": me["id"]}})
+    members = []
+    for uid in conv.get("participants", []):
+        mu = await db.users.find_one({"id": uid}, {"_id": 0})
+        if mu:
+            members.append(public_user(mu))
+    cur = db.messages.find({"conversation_id": group_id}).sort("created_at", 1).limit(300)
+    msgs = []
+    async for m in cur:
+        sender = await db.users.find_one({"id": m["from_user"]}, {"_id": 0})
+        msgs.append({
+            "id": m["id"], "from_user": m["from_user"],
+            "sender_name": (sender or {}).get("full_name", "User"),
+            "sender_avatar": (sender or {}).get("avatar"),
+            "type": m.get("type", "text"), "text": m.get("text"),
+            "media": m.get("media"), "duration": m.get("duration"),
+            "created_at": m["created_at"], "mine": m["from_user"] == me["id"],
+        })
+    return {
+        "id": group_id, "is_group": True, "name": conv.get("name"), "avatar": conv.get("avatar"),
+        "members": members, "member_count": len(members), "messages": msgs,
+        "muted": me["id"] in conv.get("muted_by", []),
+    }
 
 
 @api.get("/chat/with/{user_id}")
@@ -963,6 +1252,32 @@ async def get_conversation(user_id: str, me=Depends(get_current_user)):
 
 @api.post("/chat/send")
 async def send_message(body: MessageCreate, me=Depends(get_current_user)):
+    preview_of = lambda: body.text if body.type == "text" else ("📷 Photo" if body.type == "photo" else "🎤 Voice note")
+
+    # group message
+    if body.conversation_id:
+        conv = await db.conversations.find_one({"id": body.conversation_id, "is_group": True})
+        if conv:
+            if me["id"] not in conv.get("participants", []):
+                raise HTTPException(403, "Not a group member")
+            msg = {
+                "id": new_id(), "conversation_id": conv["id"], "from_user": me["id"], "to_user": None,
+                "is_group": True, "type": body.type, "text": body.text, "media": body.media,
+                "duration": body.duration, "read_by": [me["id"]], "created_at": now_iso(),
+            }
+            await db.messages.insert_one(msg)
+            preview = f"{me['full_name'].split(' ')[0]}: {preview_of()}"
+            await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+                "last_message": preview, "last_type": body.type, "updated_at": now_iso()}})
+            for uid in conv.get("participants", []):
+                if uid != me["id"]:
+                    await notify(uid, me["id"], "message", conv["id"], f"{conv.get('name')}: {me['full_name'].split(' ')[0]}: {preview_of()[:50]}")
+            return {
+                "id": msg["id"], "from_user": me["id"], "sender_name": me["full_name"], "sender_avatar": me.get("avatar"),
+                "type": msg["type"], "text": msg["text"], "media": msg["media"],
+                "duration": msg["duration"], "created_at": msg["created_at"], "mine": True,
+            }
+
     to_user = body.to_user
     if not to_user and body.conversation_id:
         parts = body.conversation_id.split("_")
@@ -976,7 +1291,7 @@ async def send_message(body: MessageCreate, me=Depends(get_current_user)):
         "duration": body.duration, "status": "delivered", "created_at": now_iso(),
     }
     await db.messages.insert_one(msg)
-    preview = body.text if body.type == "text" else ("📷 Photo" if body.type == "photo" else "🎤 Voice note")
+    preview = preview_of()
     await notify(to_user, me["id"], "message", me["id"], f"{me['full_name']}: {preview[:60]}")
     await db.conversations.update_one(
         {"id": cid},
@@ -1142,7 +1457,8 @@ async def get_file(path: str, token: Optional[str] = Query(None), authorization:
 # ----------------------------- admin -----------------------------
 @api.post("/admin/login")
 async def admin_login(body: AdminLogin):
-    if body.email.strip().lower() != ADMIN_EMAIL.lower() or body.password != ADMIN_PASSWORD:
+    email = body.email.strip().lower()
+    if not any(email == e.lower() and body.password == p for e, p in ADMIN_CREDS if e and p):
         raise HTTPException(400, "Invalid admin credentials")
     token = make_token("admin", is_admin=True)
     return {"token": token, "admin": True}

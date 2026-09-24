@@ -66,6 +66,8 @@ export default function Settings() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
           <Row icon="person-outline" label="Edit profile" onPress={() => router.push("/edit-profile")} testID="settings-edit-profile" />
+          <Row icon="bookmark-outline" label="Saved posts" onPress={() => router.push("/saved")} testID="settings-saved" />
+          <Row icon="star-outline" label="Inner Circle" onPress={() => router.push("/inner-circle")} testID="settings-inner-circle" />
           <Row
             icon={privacy === "public" ? "earth-outline" : "people-outline"}
             label="Profile privacy"

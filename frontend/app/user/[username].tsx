@@ -35,6 +35,11 @@ export default function UserProfile() {
   const accept = useMutation({ mutationFn: () => api.post(`/friends/accept/${data.id}`), onSuccess: () => { toast.show("Friend added!", "success"); refetch(); } });
   const unfriend = useMutation({ mutationFn: () => api.del(`/friends/${data.id}`), onSuccess: () => { toast.show("Removed", "success"); refetch(); } });
   const block = useMutation({ mutationFn: () => api.post(`/users/${data.id}/block`), onSuccess: () => { toast.show("User blocked", "success"); setMenu(false); refetch(); } });
+  const toggleInner = useMutation({
+    mutationFn: () => (data.is_inner ? api.del(`/inner-circle/${data.id}`) : api.post(`/inner-circle/${data.id}`)),
+    onSuccess: () => { toast.show(data.is_inner ? "Removed from Inner Circle" : "Added to Inner Circle ⭐", "success"); setMenu(false); refetch(); },
+    onError: (e: any) => { toast.show(e.message, "error"); setMenu(false); },
+  });
 
   if (profile.isLoading || !data) {
     return <View style={[styles.root, styles.center]}><ActivityIndicator color={colors.brandPrimary} size="large" /></View>;
@@ -73,6 +78,12 @@ export default function UserProfile() {
         </View>
         {menu && (
           <View style={[styles.menu, { top: insets.top + 50 }]}>
+            {data.friend_status === "friends" && (
+              <Pressable style={styles.menuItem} onPress={() => toggleInner.mutate()} testID="user-inner-toggle">
+                <Icon name={data.is_inner ? "star" : "star-outline"} size={18} color={colors.brandSecondary} />
+                <Text style={[styles.menuText, { color: colors.brandSecondary }]}>{data.is_inner ? "Remove from Inner Circle" : "Add to Inner Circle"}</Text>
+              </Pressable>
+            )}
             <Pressable style={styles.menuItem} onPress={() => block.mutate()} testID="user-block">
               <Icon name="ban-outline" size={18} color={colors.error} />
               <Text style={[styles.menuText, { color: colors.error }]}>Block user</Text>

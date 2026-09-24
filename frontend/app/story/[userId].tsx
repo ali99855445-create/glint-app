@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, Pressable, Animated, TextInput, StyleSheet, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, Animated, TextInput, StyleSheet, ActivityIndicator, Modal, ScrollView } from "react-native";
 import { Image } from "expo-image";
+import { useAudioPlayer } from "expo-audio";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -25,21 +26,41 @@ export default function StoryViewer() {
   const progress = useRef(new Animated.Value(0)).current;
   const [index, setIndex] = useState(0);
   const [reply, setReply] = useState("");
+  const [viewersOpen, setViewersOpen] = useState(false);
+  const [viewers, setViewers] = useState<any[]>([]);
 
   const groups = useQuery({ queryKey: ["stories"], queryFn: () => api.get("/stories/feed") });
   const group = (groups.data || []).find((g: any) => g.author.id === userId);
   const stories = group?.stories || [];
   const current = stories[index];
+  const isVoiceCur = current?.type === "voice";
+  const player = useAudioPlayer(isVoiceCur && current?.media ? fileUrl(current.media) : null);
 
   useEffect(() => {
     if (!current) return;
+    if (viewersOpen) return; // pause auto-advance while viewers sheet is open
     api.post(`/stories/${current.id}/view`).catch(() => {});
     progress.setValue(0);
-    const anim = Animated.timing(progress, { toValue: 1, duration: DURATION, useNativeDriver: false });
+    const dur = isVoiceCur ? Math.max(2000, (current.duration || 5) * 1000) : DURATION;
+    if (isVoiceCur && current.media) {
+      try { player.seekTo(0); player.play(); } catch {}
+    }
+    const anim = Animated.timing(progress, { toValue: 1, duration: dur, useNativeDriver: false });
     anim.start(({ finished }) => { if (finished) next(); });
-    return () => anim.stop();
+    return () => { anim.stop(); if (isVoiceCur) { try { player.pause(); } catch {} } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, current?.id]);
+  }, [index, current?.id, viewersOpen]);
+
+  async function openViewers() {
+    if (!current) return;
+    setViewersOpen(true);
+    try {
+      const res = await api.get(`/stories/${current.id}/viewers`);
+      setViewers(res.viewers || []);
+    } catch {
+      setViewers([]);
+    }
+  }
 
   function next() {
     if (index < stories.length - 1) setIndex((i) => i + 1);
@@ -83,10 +104,24 @@ export default function StoryViewer() {
   }
 
   const isText = current.type === "text";
+  const isVoice = current.type === "voice";
 
   return (
     <View style={styles.root} testID="story-viewer">
-      {isText ? (
+      {isVoice ? (
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: current.bg_color || "#EAB308", alignItems: "center", justifyContent: "center", padding: spacing.xl, gap: spacing.xl }]}>
+          <View style={styles.voiceOrb}>
+            <Icon name="musical-notes" size={54} color="#FFFFFF" />
+          </View>
+          <View style={styles.waveRow}>
+            {Array.from({ length: 16 }).map((_, i) => (
+              <View key={i} style={[styles.waveBar, { height: 8 + ((i * 7) % 34) }]} />
+            ))}
+          </View>
+          {!!current.text && <Text style={styles.voiceCap}>{current.text}</Text>}
+          <Text style={styles.voiceHint}>🎙️ Voice drop</Text>
+        </View>
+      ) : isText ? (
         <View style={[StyleSheet.absoluteFill, { backgroundColor: current.bg_color || "#EAB308", alignItems: "center", justifyContent: "center", padding: spacing.xl }]}>
           <Text style={styles.storyText}>{current.text}</Text>
         </View>
@@ -150,6 +185,38 @@ export default function StoryViewer() {
           </Pressable>
         </View>
       )}
+
+      {/* own story: viewers pill */}
+      {group.is_mine && (
+        <Pressable style={[styles.viewersPill, { bottom: insets.bottom + spacing.md }]} onPress={openViewers} testID="story-viewers-btn">
+          <Icon name="eye" size={18} color="#FFFFFF" />
+          <Text style={styles.viewersPillText}>{current.viewed ? "Viewers" : "Viewers"}</Text>
+          <Icon name="chevron-up" size={16} color="rgba(255,255,255,0.8)" />
+        </Pressable>
+      )}
+
+      <Modal visible={viewersOpen} transparent animationType="slide" onRequestClose={() => setViewersOpen(false)}>
+        <Pressable style={styles.sheetOverlay} onPress={() => setViewersOpen(false)} testID="story-viewers-overlay" />
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]}>
+          <View style={styles.sheetHandle} />
+          <Text style={styles.sheetTitle}>Viewed by {viewers.length}</Text>
+          <ScrollView style={{ maxHeight: 360 }}>
+            {viewers.length === 0 ? (
+              <Text style={styles.noViewers}>No views yet. Share more to get seen! 👀</Text>
+            ) : (
+              viewers.map((v) => (
+                <View key={v.id} style={styles.viewerRow}>
+                  <Avatar uri={v.avatar} name={v.full_name} size={42} />
+                  <View style={{ flex: 1 }}>
+                    <UserName name={v.full_name} verified={v.verified} size={15} />
+                    <Text style={styles.viewerHandle}>@{v.username}</Text>
+                  </View>
+                </View>
+              ))
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -159,6 +226,11 @@ const styles = StyleSheet.create({
   empty: { color: "#fff", fontFamily: fonts.medium, fontSize: 16 },
   emptyLink: { color: "#EAB308", fontFamily: fonts.semibold, fontSize: 16 },
   storyText: { color: "#FFFFFF", fontFamily: fonts.displayBold, fontSize: 30, textAlign: "center", lineHeight: 40 },
+  voiceOrb: { width: 130, height: 130, borderRadius: 65, backgroundColor: "rgba(255,255,255,0.25)", borderWidth: 3, borderColor: "#FFFFFF", alignItems: "center", justifyContent: "center" },
+  waveRow: { flexDirection: "row", alignItems: "center", gap: 4, height: 40 },
+  waveBar: { width: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.85)" },
+  voiceCap: { color: "#FFFFFF", fontFamily: fonts.semibold, fontSize: 20, textAlign: "center" },
+  voiceHint: { color: "rgba(255,255,255,0.85)", fontFamily: fonts.medium, fontSize: 14 },
   topScrim: { position: "absolute", top: 0, left: 0, right: 0, height: 160 },
   bottomScrim: { position: "absolute", bottom: 0, left: 0, right: 0, height: 160 },
   progressRow: { position: "absolute", left: spacing.md, right: spacing.md, flexDirection: "row", gap: 4 },
@@ -171,4 +243,13 @@ const styles = StyleSheet.create({
   replyBar: { position: "absolute", left: spacing.lg, right: spacing.lg, flexDirection: "row", alignItems: "center", gap: spacing.sm },
   replyInput: { flex: 1, borderWidth: 1.5, borderColor: "rgba(255,255,255,0.6)", borderRadius: radius.pill, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, color: "#FFFFFF", fontFamily: fonts.text, fontSize: 15 },
   replySend: { width: 44, height: 44, borderRadius: 22, backgroundColor: "rgba(255,255,255,0.2)", alignItems: "center", justifyContent: "center" },
+  viewersPill: { position: "absolute", alignSelf: "center", flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: "rgba(0,0,0,0.5)", borderWidth: 1, borderColor: "rgba(255,255,255,0.3)", paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.pill },
+  viewersPillText: { color: "#FFFFFF", fontFamily: fonts.semibold, fontSize: 14 },
+  sheetOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
+  sheet: { position: "absolute", left: 0, right: 0, bottom: 0, backgroundColor: "#0F0F0F", borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, padding: spacing.lg, borderTopWidth: 1, borderColor: "#262626" },
+  sheetHandle: { alignSelf: "center", width: 40, height: 4, borderRadius: 2, backgroundColor: "#3A3A3A", marginBottom: spacing.md },
+  sheetTitle: { color: "#FFFFFF", fontFamily: fonts.displayBold, fontSize: 18, marginBottom: spacing.md },
+  noViewers: { color: "#9CA3AF", fontFamily: fonts.text, fontSize: 15, textAlign: "center", paddingVertical: spacing.xl },
+  viewerRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingVertical: spacing.sm },
+  viewerHandle: { color: "#9CA3AF", fontFamily: fonts.text, fontSize: 13, marginTop: 2 },
 });

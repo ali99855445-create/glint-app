@@ -53,6 +53,12 @@ export function PostCard({ post, onChanged }: { post: Post; onChanged?: () => vo
     onSuccess: (d) => { setLocal({ ...local, saved: d.saved }); toast.show(d.saved ? "Saved" : "Removed from saved", "success"); },
   });
 
+  const sparkMut = useMutation({
+    mutationFn: () => api.post(`/posts/${local.id}/spark`),
+    onSuccess: (d) => { setLocal({ ...local, sparks: d.sparks, i_sparked: true }); toast.show("Spark sent 🪙", "success"); },
+    onError: (e: any) => toast.show(e.message, "error"),
+  });
+
   const voteMut = useMutation({
     mutationFn: (opt: number) => api.post(`/posts/${local.id}/vote?option=${opt}`),
     onSuccess: (data) => setLocal(data),
@@ -94,7 +100,13 @@ export function PostCard({ post, onChanged }: { post: Post; onChanged?: () => vo
   const myReactionObj = REACTIONS.find((r) => r.key === local.my_reaction);
 
   return (
-    <View style={styles.card} testID={`post-${local.id}`}>
+    <View style={[styles.card, local.golden && styles.cardGolden]} testID={`post-${local.id}`}>
+      {local.golden && (
+        <View style={styles.goldenTag}>
+          <Icon name="sparkles" size={12} color={colors.onBrandSecondary} />
+          <Text style={styles.goldenTagText}>Golden Hour</Text>
+        </View>
+      )}
       {/* header */}
       <View style={styles.header}>
         <Pressable style={styles.authorRow} onPress={() => router.push(`/user/${local.author.username}`)}>
@@ -165,13 +177,21 @@ export function PostCard({ post, onChanged }: { post: Post; onChanged?: () => vo
       )}
 
       {/* reaction summary bar */}
-      {(local.total_reactions > 0 || local.comment_count > 0) && (
+      {(local.total_reactions > 0 || local.comment_count > 0 || local.sparks > 0) && (
         <View style={styles.summary}>
           <View style={styles.summaryLeft}>
             <ReactionSummary counts={local.reaction_counts} />
             {local.total_reactions > 0 && <Text style={styles.summaryText}>{local.total_reactions}</Text>}
           </View>
-          {local.comment_count > 0 && <Text style={styles.summaryText}>{local.comment_count} comments</Text>}
+          <View style={styles.summaryRight}>
+            {local.sparks > 0 && (
+              <View style={styles.sparkCount}>
+                <Text style={{ fontSize: 12 }}>🪙</Text>
+                <Text style={styles.sparkCountText}>{local.sparks}</Text>
+              </View>
+            )}
+            {local.comment_count > 0 && <Text style={styles.summaryText}>{local.comment_count} comments</Text>}
+          </View>
         </View>
       )}
 
@@ -202,6 +222,11 @@ export function PostCard({ post, onChanged }: { post: Post; onChanged?: () => vo
           <Icon name="arrow-redo-outline" size={21} color={colors.onSurfaceTertiary} />
           <Text style={styles.actionText}>Share</Text>
         </Pressable>
+        {!local.is_mine && (
+          <Pressable style={styles.action} onPress={() => sparkMut.mutate()} disabled={local.i_sparked} testID={`post-spark-${local.id}`}>
+            <Text style={{ fontSize: 18, opacity: local.i_sparked ? 0.5 : 1 }}>🪙</Text>
+          </Pressable>
+        )}
         <Pressable style={styles.action} onPress={() => saveMut.mutate()} testID={`post-bookmark-${local.id}`}>
           <Icon name={local.saved ? "bookmark" : "bookmark-outline"} size={21} color={local.saved ? colors.brandSecondary : colors.onSurfaceTertiary} />
         </Pressable>
@@ -212,6 +237,9 @@ export function PostCard({ post, onChanged }: { post: Post; onChanged?: () => vo
 
 const useStyles = makeStyles((c) => ({
   card: { backgroundColor: c.surfaceSecondary, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, padding: spacing.lg, gap: spacing.md },
+  cardGolden: { borderColor: c.brandSecondary, borderWidth: 1.5, backgroundColor: c.brandTertiary },
+  goldenTag: { flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start", backgroundColor: c.brandSecondary, paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.pill, marginBottom: -spacing.xs },
+  goldenTagText: { color: c.onBrandSecondary, fontFamily: fonts.semibold, fontSize: 11 },
   header: { flexDirection: "row", alignItems: "center" },
   authorRow: { flex: 1, flexDirection: "row", alignItems: "center", gap: spacing.md },
   meta: { color: c.muted, fontFamily: fonts.text, fontSize: 12, marginTop: 2 },
@@ -230,6 +258,9 @@ const useStyles = makeStyles((c) => ({
   pollTotal: { color: c.muted, fontFamily: fonts.text, fontSize: 12 },
   summary: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: spacing.xs },
   summaryLeft: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  summaryRight: { flexDirection: "row", alignItems: "center", gap: spacing.md },
+  sparkCount: { flexDirection: "row", alignItems: "center", gap: 3 },
+  sparkCountText: { color: c.brandSecondary, fontFamily: fonts.semibold, fontSize: 13 },
   summaryText: { color: c.muted, fontFamily: fonts.text, fontSize: 13 },
   actions: { flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: c.border, paddingTop: spacing.sm, marginTop: spacing.xs },
   action: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs, paddingVertical: spacing.xs },

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Modal } from "react-native";
 import { Image } from "expo-image";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useRouter } from "expo-router";
@@ -31,6 +31,24 @@ export default function CreatePost() {
   const [options, setOptions] = useState<string[]>(["", ""]);
   const [uploading, setUploading] = useState(false);
   const [posting, setPosting] = useState(false);
+  const [audience, setAudience] = useState<"public" | "friends" | "inner">("public");
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiTone, setAiTone] = useState("witty");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+
+  async function generateCaptions() {
+    setAiLoading(true);
+    setAiSuggestions([]);
+    try {
+      const r = await api.post("/ai/captions", { topic: text.trim() || "my day", tone: aiTone });
+      setAiSuggestions(r.suggestions || []);
+    } catch (e: any) {
+      toast.show(e.message, "error");
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   async function pickImage() {
     setUploading(true);
@@ -58,6 +76,7 @@ export default function CreatePost() {
         text: text.trim(),
         image: mode === "photo" ? image : null,
         poll_options: mode === "poll" ? options.filter((o) => o.trim()) : null,
+        audience,
       });
       qc.invalidateQueries({ queryKey: ["feed"] });
       toast.show("Posted!", "success");
@@ -86,6 +105,24 @@ export default function CreatePost() {
           <Avatar uri={user?.avatar} name={user?.full_name} size={44} />
           <Text style={styles.authorName}>{user?.full_name}</Text>
         </View>
+
+        <View style={styles.audienceRow}>
+          {([
+            { k: "public", icon: "earth", label: "Public" },
+            { k: "friends", icon: "people", label: "Friends" },
+            { k: "inner", icon: "star", label: "Inner Circle" },
+          ] as const).map((a) => (
+            <Pressable key={a.k} onPress={() => setAudience(a.k)} style={[styles.audChip, audience === a.k && { backgroundColor: colors.brandPrimary }]} testID={`create-audience-${a.k}`}>
+              <Icon name={a.icon as any} size={14} color={audience === a.k ? colors.onBrandPrimary : colors.onSurfaceTertiary} />
+              <Text style={[styles.audText, { color: audience === a.k ? colors.onBrandPrimary : colors.onSurfaceTertiary }]}>{a.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+
+        <Pressable style={styles.aiBtn} onPress={() => { setAiOpen(true); setAiSuggestions([]); }} testID="create-ai-btn">
+          <Icon name="sparkles" size={16} color={colors.brandSecondary} />
+          <Text style={styles.aiBtnText}>AI Caption Studio</Text>
+        </Pressable>
 
         <Field
           value={text}
@@ -134,6 +171,36 @@ export default function CreatePost() {
           <Text style={[styles.toolText, { color: colors.muted }]}>Video (soon)</Text>
         </View>
       </View>
+
+      <Modal visible={aiOpen} transparent animationType="slide" onRequestClose={() => setAiOpen(false)}>
+        <Pressable style={styles.sheetOverlay} onPress={() => setAiOpen(false)} testID="ai-overlay" />
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetTitleRow}>
+            <Icon name="sparkles" size={18} color={colors.brandSecondary} />
+            <Text style={styles.sheetTitle}>AI Caption Studio</Text>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.toneRow}>
+            {["witty", "aesthetic", "minimalist", "bold", "funny"].map((t) => (
+              <Pressable key={t} onPress={() => setAiTone(t)} style={[styles.toneChip, aiTone === t && { backgroundColor: colors.brandPrimary }]} testID={`ai-tone-${t}`}>
+                <Text style={[styles.toneText, { color: aiTone === t ? colors.onBrandPrimary : colors.onSurfaceTertiary }]}>{t}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+          <Button title="Generate captions" onPress={generateCaptions} loading={aiLoading} testID="ai-generate" small icon={<Icon name="flash" size={16} color={colors.onBrandPrimary} />} />
+          <ScrollView style={{ maxHeight: 280, marginTop: spacing.sm }}>
+            {aiSuggestions.map((s, i) => (
+              <Pressable key={i} style={styles.suggestion} onPress={() => { setText(s); setAiOpen(false); toast.show("Caption added", "success"); }} testID={`ai-suggestion-${i}`}>
+                <Text style={styles.suggestionText}>{s}</Text>
+                <Icon name="add-circle" size={20} color={colors.brandPrimary} />
+              </Pressable>
+            ))}
+            {!aiLoading && aiSuggestions.length === 0 && (
+              <Text style={styles.aiHint}>Pick a tone and tap generate. Add your draft text first for tailored ideas.</Text>
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -147,6 +214,11 @@ const useStyles = makeStyles((c) => ({
   scroll: { padding: spacing.lg, gap: spacing.md },
   authorRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
   authorName: { color: c.onSurface, fontFamily: fonts.semibold, fontSize: 16 },
+  audienceRow: { flexDirection: "row", gap: spacing.sm },
+  audChip: { flexDirection: "row", alignItems: "center", gap: spacing.xs, backgroundColor: c.surfaceTertiary, borderRadius: radius.pill, paddingVertical: spacing.xs, paddingHorizontal: spacing.md },
+  audText: { fontFamily: fonts.semibold, fontSize: 13 },
+  aiBtn: { flexDirection: "row", alignItems: "center", gap: spacing.sm, alignSelf: "flex-start", backgroundColor: c.brandTertiary, borderWidth: 1, borderColor: c.brandSecondary, borderRadius: radius.pill, paddingVertical: spacing.sm, paddingHorizontal: spacing.lg },
+  aiBtnText: { color: c.brandSecondary, fontFamily: fonts.semibold, fontSize: 14 },
   imageWrap: { position: "relative" },
   image: { width: "100%", aspectRatio: 1, borderRadius: radius.md, backgroundColor: c.surfaceTertiary },
   removeImg: { position: "absolute", top: spacing.sm, right: spacing.sm, width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center" },
@@ -155,4 +227,15 @@ const useStyles = makeStyles((c) => ({
   toolbar: { flexDirection: "row", gap: spacing.xl, paddingHorizontal: spacing.lg, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: c.border },
   tool: { alignItems: "center", gap: spacing.xs },
   toolText: { color: c.onSurfaceSecondary, fontFamily: fonts.medium, fontSize: 12 },
+  sheetOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)" },
+  sheet: { position: "absolute", left: 0, right: 0, bottom: 0, backgroundColor: c.surfaceSecondary, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, padding: spacing.lg, borderTopWidth: 1, borderColor: c.border },
+  sheetHandle: { alignSelf: "center", width: 40, height: 4, borderRadius: 2, backgroundColor: c.borderStrong, marginBottom: spacing.md },
+  sheetTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.md },
+  sheetTitle: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 18 },
+  toneRow: { gap: spacing.sm, paddingBottom: spacing.md },
+  toneChip: { flexShrink: 0, backgroundColor: c.surfaceTertiary, borderRadius: radius.pill, paddingVertical: spacing.sm, paddingHorizontal: spacing.lg },
+  toneText: { fontFamily: fonts.semibold, fontSize: 14, textTransform: "capitalize" },
+  suggestion: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.md, backgroundColor: c.surfaceTertiary, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm },
+  suggestionText: { flex: 1, color: c.onSurface, fontFamily: fonts.medium, fontSize: 15, lineHeight: 21 },
+  aiHint: { color: c.muted, fontFamily: fonts.text, fontSize: 14, textAlign: "center", paddingVertical: spacing.lg, lineHeight: 20 },
 }));
