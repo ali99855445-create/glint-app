@@ -2,7 +2,7 @@
   "expo": {
     "name": "Glint",
     "slug": "glint-app",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "glint",
@@ -28,7 +28,7 @@
         "READ_MEDIA_AUDIO",
         "READ_EXTERNAL_STORAGE"
       ],
-      "versionCode": 2
+      "versionCode": 3
     },
     "web": {
       "bundler": "metro",

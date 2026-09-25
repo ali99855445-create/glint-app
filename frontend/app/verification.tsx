@@ -9,7 +9,7 @@ import React from "react";
 import { makeStyles, useTheme, fonts, spacing, radius } from "@/src/theme";
 import { Field, Button } from "@/src/components/ui";
 import { Icon } from "@/src/components/Icon";
-import { GoldenTick } from "@/src/components/Avatar";
+import { BlueTick } from "@/src/components/Avatar";
 import { useToast } from "@/src/components/Toast";
 import { api, fileUrl } from "@/src/api/client";
 import { pickAndUploadImage } from "@/src/lib/media";
@@ -58,7 +58,7 @@ export default function Verification() {
 
   const StatusBanner = () => {
     if (current === "pending") return <Banner icon="hourglass-outline" color={colors.warning} title="Under review" text="Your verification request is being reviewed by our team. This can take a few days." />;
-    if (current === "approved") return <Banner icon="checkmark-circle" color={colors.brandSecondary} title="You're verified!" text="Your Golden Tick is now visible across Glint." />;
+    if (current === "approved") return <Banner icon="checkmark-circle" color="#1D9BF0" title="You're verified!" text="Your Blue Tick is now visible across Glint." />;
     if (current === "rejected") return <Banner icon="close-circle" color={colors.error} title="Request declined" text="Your last request was declined. You can submit a new one below." />;
     return null;
   };
@@ -73,9 +73,9 @@ export default function Verification() {
 
       <KeyboardAwareScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg, paddingBottom: spacing["2xl"] }} keyboardShouldPersistTaps="handled" bottomOffset={20}>
         <View style={styles.hero}>
-          <GoldenTick size={40} />
-          <Text style={styles.heroTitle}>The Golden Tick</Text>
-          <Text style={styles.heroText}>Verify your identity to earn a Golden Tick that appears next to your name everywhere on Glint.</Text>
+          <BlueTick size={40} />
+          <Text style={styles.heroTitle}>The Blue Tick</Text>
+          <Text style={styles.heroText}>Verify your identity to earn a Blue Tick that appears next to your name everywhere on Glint.</Text>
         </View>
 
         <StatusBanner />
