@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.interactiveglint.gfrvit",
+      "bundleIdentifier": "com.glinttechnologies.glint",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Upload photos to posts, stories and your profile",
         "NSCameraUsageDescription": "Take photos to share on Glint",
@@ -21,7 +21,7 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "com.emergent.interactiveglint.gfrvit",
+      "package": "com.glinttechnologies.glint",
       "permissions": ["RECORD_AUDIO"]
     },
     "web": {
