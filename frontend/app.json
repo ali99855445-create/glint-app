@@ -2,7 +2,7 @@
   "expo": {
     "name": "Glint",
     "slug": "glint-app",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "glint",
@@ -29,7 +29,7 @@
         "READ_EXTERNAL_STORAGE",
         "CAMERA"
       ],
-      "versionCode": 6
+      "versionCode": 7
     },
     "web": {
       "bundler": "metro",
@@ -41,8 +41,6 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-image.png",
-          "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#FFFFFF"
         }
