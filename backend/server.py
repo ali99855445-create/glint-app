@@ -53,6 +53,9 @@ RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", SMTP_FROM_EMAIL or "nore
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_VERIFY_SERVICE_SID = os.environ.get("TWILIO_VERIFY_SERVICE_SID", "").strip()
+INFOBIP_BASE_URL = os.environ.get("INFOBIP_BASE_URL", "").strip().rstrip("/")
+INFOBIP_API_KEY = os.environ.get("INFOBIP_API_KEY", "")
+INFOBIP_SMS_SENDER = os.environ.get("INFOBIP_SMS_SENDER", "ServiceSMS").strip() or "ServiceSMS"
 DEV_OTP_ENABLED = os.environ.get("DEV_OTP_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 app = FastAPI()
@@ -204,6 +207,56 @@ async def active_suspension(user: dict) -> Optional[dict]:
     }
 
 
+def _infobip_sms_configured() -> bool:
+    return bool(INFOBIP_BASE_URL and INFOBIP_API_KEY)
+
+
+def _infobip_send_sms_sync(phone: str, code: str) -> dict:
+    if not _infobip_sms_configured():
+        raise RuntimeError("Infobip SMS is not configured")
+    payload = json.dumps({
+        "messages": [{
+            "sender": INFOBIP_SMS_SENDER,
+            "destinations": [{"to": phone.lstrip("+")}],
+            "content": {"text": f"Your Glint verification code is {code}. It expires in 10 minutes."},
+        }]
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{INFOBIP_BASE_URL}/sms/3/messages",
+        data=payload,
+        headers={
+            "Authorization": f"App {INFOBIP_API_KEY}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Glint/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            if response.status < 200 or response.status >= 300:
+                raise RuntimeError(f"Infobip returned HTTP {response.status}")
+            return data
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        logger.error("Infobip SMS HTTP %s: %s", exc.code, detail[:500])
+        raise
+
+
+async def _send_infobip_phone_otp(phone: str, code: str) -> bool:
+    try:
+        data = await run_in_threadpool(_infobip_send_sms_sync, phone, code)
+        messages = data.get("messages") or []
+        if not messages:
+            return False
+        status = (messages[0].get("status") or {}).get("groupName")
+        return status in {"PENDING", "DELIVERED"}
+    except Exception:
+        logger.exception("Failed to send Infobip phone verification")
+        return False
+
+
 def _twilio_verify_configured() -> bool:
     return bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_VERIFY_SERVICE_SID)
 
@@ -246,19 +299,23 @@ def _twilio_verify_request_sync(path: str, payload: dict) -> dict:
         raise
 
 
-async def send_phone_otp(phone: str) -> bool:
-    if not _twilio_verify_configured():
-        return False
-    try:
-        data = await run_in_threadpool(
-            _twilio_verify_request_sync,
-            "Verifications",
-            {"To": phone, "Channel": "sms"},
-        )
-        return data.get("status") in {"pending", "approved"}
-    except Exception:
-        logger.exception("Failed to start Twilio phone verification")
-        return False
+async def send_phone_otp(phone: str, code: str) -> bool:
+    # Prefer Infobip for the current Glint test flow. Keep Twilio as a fallback
+    # so switching providers only requires environment configuration.
+    if _infobip_sms_configured():
+        return await _send_infobip_phone_otp(phone, code)
+    if _twilio_verify_configured():
+        try:
+            data = await run_in_threadpool(
+                _twilio_verify_request_sync,
+                "Verifications",
+                {"To": phone, "Channel": "sms"},
+            )
+            return data.get("status") in {"pending", "approved"}
+        except Exception:
+            logger.exception("Failed to start Twilio phone verification")
+            return False
+    return False
 
 
 async def check_phone_otp(phone: str, code: str) -> bool:
@@ -546,8 +603,8 @@ async def health():
         "mongodb": mongo_ok,
         "email_configured": email_ok,
         "email_provider": "resend" if RESEND_API_KEY else ("smtp" if email_ok else "none"),
-        "sms_configured": _twilio_verify_configured(),
-        "sms_provider": "twilio_verify" if _twilio_verify_configured() else "none",
+        "sms_configured": _infobip_sms_configured() or _twilio_verify_configured(),
+        "sms_provider": "infobip" if _infobip_sms_configured() else ("twilio_verify" if _twilio_verify_configured() else "none"),
     }
 
 
@@ -589,6 +646,8 @@ async def register_init(body: RegisterInit):
         "inner_circle": [],
         "last_spark_bonus": None,
         "otp": code,
+        "otp_expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+        "otp_attempts": 0,
         "otp_purpose": "signup",
         "privacy": "public",
         "suspended": False,
@@ -607,7 +666,7 @@ async def register_init(body: RegisterInit):
         if DEV_OTP_ENABLED:
             sent = True
         else:
-            sent = await send_phone_otp(contact)
+            sent = await send_phone_otp(contact, code)
         if not sent:
             raise HTTPException(503, "Unable to send phone verification code. Check the phone number and try again.")
 
@@ -623,11 +682,33 @@ async def verify_otp(body: VerifyOtp):
     if not u:
         raise HTTPException(404, "User not found")
     if u.get("phone") and not DEV_OTP_ENABLED:
-        if not await check_phone_otp(u["phone"], body.code.strip()):
-            raise HTTPException(400, "Invalid or expired phone verification code")
+        if _infobip_sms_configured():
+            expires_raw = u.get("otp_expires_at")
+            expired = True
+            if expires_raw:
+                try:
+                    exp = datetime.fromisoformat(str(expires_raw).replace("Z", "+00:00"))
+                    if exp.tzinfo is None:
+                        exp = exp.replace(tzinfo=timezone.utc)
+                    expired = exp <= datetime.now(timezone.utc)
+                except Exception:
+                    expired = True
+            if expired:
+                raise HTTPException(400, "Phone verification code expired. Request a new code.")
+            attempts = int(u.get("otp_attempts") or 0)
+            if attempts >= 5:
+                raise HTTPException(429, "Too many incorrect attempts. Request a new code.")
+            if u.get("otp") != body.code.strip():
+                await db.users.update_one({"id": body.user_id}, {"$inc": {"otp_attempts": 1}})
+                raise HTTPException(400, "Invalid phone verification code")
+        elif _twilio_verify_configured():
+            if not await check_phone_otp(u["phone"], body.code.strip()):
+                raise HTTPException(400, "Invalid or expired phone verification code")
+        else:
+            raise HTTPException(503, "Phone verification provider is not configured")
     elif u.get("otp") != body.code:
         raise HTTPException(400, "Invalid OTP code")
-    verify_update = {"verified": True, "otp": None}
+    verify_update = {"verified": True, "otp": None, "otp_expires_at": None, "otp_attempts": 0}
     if u.get("phone"):
         verify_update["phone_verified"] = True
     await db.users.update_one({"id": body.user_id}, {"$set": verify_update})
@@ -642,7 +723,7 @@ async def resend_otp(body: VerifyOtp):
     if not u:
         raise HTTPException(404, "User not found")
     code = f"{random.randint(0, 999999):06d}"
-    await db.users.update_one({"id": body.user_id}, {"$set": {"otp": code}})
+    await db.users.update_one({"id": body.user_id}, {"$set": {"otp": code, "otp_expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(), "otp_attempts": 0}})
     logger.info(f"[OTP] resend generated for {u.get('username')}")
     email = u.get("email")
     phone = u.get("phone")
@@ -654,7 +735,7 @@ async def resend_otp(body: VerifyOtp):
         if DEV_OTP_ENABLED:
             sent = True
         else:
-            sent = await send_phone_otp(phone)
+            sent = await send_phone_otp(phone, code)
         if not sent:
             raise HTTPException(503, "Unable to resend phone verification code. Please try again later.")
     else:
