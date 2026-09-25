@@ -1927,6 +1927,11 @@ async def admin_user_full(user_id: str, _=Depends(require_admin)):
     async for a in db.admin_audit.find({"target_user_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(50):
         history.append(a)
 
+    content_ids = []
+    content_ids += await db.posts.distinct("id", {"author_id": user_id})
+    content_ids += await db.comments.distinct("id", {"author_id": user_id})
+    content_ids += await db.stories.distinct("id", {"author_id": user_id})
+
     counts = {
         "posts": await db.posts.count_documents({"author_id": user_id, "deleted_at": None}),
         "comments": await db.comments.count_documents({"author_id": user_id, "deleted_at": None}),
@@ -1934,6 +1939,7 @@ async def admin_user_full(user_id: str, _=Depends(require_admin)):
         "friends": await db.friendships.count_documents({"users": user_id}),
         "tickets": await db.tickets.count_documents({"user_id": user_id}),
         "reports_made": await db.reports.count_documents({"reporter_id": user_id}),
+        "reports_received": await db.reports.count_documents({"target_id": {"$in": content_ids}}) if content_ids else 0,
     }
 
     return {
