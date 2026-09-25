@@ -64,10 +64,10 @@ jobs:
 
       - name: Build real Glint APK
         working-directory: frontend/android
-        run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+        run: chmod +x gradlew && ./gradlew assembleRelease --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: glint-social-app
-          path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
+          name: glint-social-app-release
+          path: frontend/android/app/build/outputs/apk/release/app-release.apk
