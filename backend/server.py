@@ -355,6 +355,39 @@ class ForceUpdateBody(BaseModel):
     min_version: Optional[str] = None
 
 
+def _smtp_check_sync() -> bool:
+    if not (SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD):
+        return False
+    context = ssl.create_default_context()
+    if SMTP_SECURITY == "ssl":
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+    else:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+    return True
+
+
+@app.get("/health")
+async def health():
+    mongo_ok = False
+    smtp_ok = False
+    try:
+        await client.admin.command("ping")
+        mongo_ok = True
+    except Exception:
+        mongo_ok = False
+    try:
+        smtp_ok = await run_in_threadpool(_smtp_check_sync)
+    except Exception:
+        smtp_ok = False
+    return {"status": "ok" if mongo_ok and smtp_ok else "degraded", "mongodb": mongo_ok, "smtp": smtp_ok}
+
+
+
 # ----------------------------- auth -----------------------------
 @api.post("/auth/register-init")
 async def register_init(body: RegisterInit):
