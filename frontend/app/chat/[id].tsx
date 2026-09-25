@@ -64,9 +64,13 @@ export default function ChatDetail() {
   }
 
   async function sendPhoto() {
-    const r = await pickAndUploadImage({ quality: 0.6 });
-    if (r?.denied) return toast.show("Photo permission needed", "error");
-    if (r?.url) sendMut.mutate({ type: "photo", media: r.url });
+    try {
+      const r = await pickAndUploadImage({ quality: 0.6 });
+      if (r?.denied) return toast.show("Photo permission needed", "error");
+      if (r?.url) sendMut.mutate({ type: "photo", media: r.url });
+    } catch (e: any) {
+      toast.show(e.message || "Upload failed", "error");
+    }
   }
 
   async function startRecording() {
@@ -95,7 +99,7 @@ export default function ChatDetail() {
       const url = await uploadFile(uri, `voice_${Date.now()}.m4a`, "audio/m4a");
       sendMut.mutate({ type: "voice", media: url, duration });
     } catch (e: any) {
-      toast.show("Recording failed", "error");
+      toast.show(e.message || "Voice upload failed", "error");
     } finally {
       setSending(false);
     }
