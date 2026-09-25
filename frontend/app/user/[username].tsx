@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { makeStyles, useTheme, fonts, spacing, radius } from "@/src/theme";
 import { api, fileUrl } from "@/src/api/client";
-import { Avatar, GoldenTick } from "@/src/components/Avatar";
+import { Avatar, BlueTick } from "@/src/components/Avatar";
 import { Icon } from "@/src/components/Icon";
 import { PostCard } from "@/src/components/PostCard";
 import { Button } from "@/src/components/ui";
@@ -105,7 +105,7 @@ export default function UserProfile() {
 
         <View style={styles.nameRow}>
           <Text style={styles.name}>{data.full_name}</Text>
-          {data.verified && <GoldenTick size={20} />}
+          {data.verified && <BlueTick size={20} />}
         </View>
         <Text style={styles.username}>@{data.username}</Text>
         {!!data.bio && <Text style={styles.bio}>{data.bio}</Text>}
