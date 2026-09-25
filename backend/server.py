@@ -1756,18 +1756,27 @@ async def admin_verifications(_=Depends(require_admin)):
 
 
 @api.post("/admin/verifications/{vid}/approve")
-async def approve_verification(vid: str, _=Depends(require_admin)):
+async def approve_verification(vid: str, body: AdminReasonBody = AdminReasonBody(reason="Identity verification approved"), _=Depends(require_admin)):
     v = await db.verifications.find_one({"id": vid})
     if not v:
         raise HTTPException(404, "Not found")
-    await db.verifications.update_one({"id": vid}, {"$set": {"status": "approved"}})
+    reason = (body.reason or "Identity verification approved").strip()
+    await db.verifications.update_one({"id": vid}, {"$set": {"status": "approved", "review_reason": reason, "reviewed_at": now_iso()}})
     await db.users.update_one({"id": v["user_id"]}, {"$set": {"golden_tick": True}})
+    await admin_notify(v["user_id"], f"Your Blue Tick verification was approved. Reason: {reason}")
+    await admin_audit("approve_verification", "verification", vid, reason, v["user_id"])
     return {"ok": True}
 
 
 @api.post("/admin/verifications/{vid}/reject")
-async def reject_verification(vid: str, _=Depends(require_admin)):
-    await db.verifications.update_one({"id": vid}, {"$set": {"status": "rejected"}})
+async def reject_verification(vid: str, body: AdminReasonBody = AdminReasonBody(reason="Verification requirements were not met"), _=Depends(require_admin)):
+    v = await db.verifications.find_one({"id": vid})
+    if not v:
+        raise HTTPException(404, "Not found")
+    reason = (body.reason or "Verification requirements were not met").strip()
+    await db.verifications.update_one({"id": vid}, {"$set": {"status": "rejected", "review_reason": reason, "reviewed_at": now_iso()}})
+    await admin_notify(v["user_id"], f"Your Blue Tick verification request was declined. Reason: {reason}")
+    await admin_audit("reject_verification", "verification", vid, reason, v["user_id"])
     return {"ok": True}
 
 
@@ -1791,16 +1800,29 @@ async def admin_reports(_=Depends(require_admin)):
 
 
 @api.post("/admin/reports/{report_id}/delete-content")
-async def delete_reported(report_id: str, _=Depends(require_admin)):
+async def delete_reported(report_id: str, body: AdminReasonBody = AdminReasonBody(reason="Content violated Glint rules"), _=Depends(require_admin)):
     r = await db.reports.find_one({"id": report_id})
     if not r:
         raise HTTPException(404, "Not found")
+    reason = (body.reason or "Content violated Glint rules").strip()
     ts = now_iso()
+    author_id = None
     if r["target_type"] == "post":
-        await db.posts.update_one({"id": r["target_id"]}, {"$set": {"deleted_at": ts}})
+        target = await db.posts.find_one({"id": r["target_id"]})
+        author_id = target.get("author_id") if target else None
+        await db.posts.update_one({"id": r["target_id"]}, {"$set": {"deleted_at": ts, "moderation_reason": reason, "moderated_by": "admin"}})
     elif r["target_type"] == "story":
-        await db.stories.update_one({"id": r["target_id"]}, {"$set": {"deleted_at": ts}})
-    await db.reports.update_one({"id": report_id}, {"$set": {"status": "resolved"}})
+        target = await db.stories.find_one({"id": r["target_id"]})
+        author_id = target.get("author_id") if target else None
+        await db.stories.update_one({"id": r["target_id"]}, {"$set": {"deleted_at": ts, "moderation_reason": reason, "moderated_by": "admin"}})
+    elif r["target_type"] == "comment":
+        target = await db.comments.find_one({"id": r["target_id"]})
+        author_id = target.get("author_id") if target else None
+        await db.comments.update_one({"id": r["target_id"]}, {"$set": {"deleted_at": ts, "moderation_reason": reason, "moderated_by": "admin"}})
+    if author_id:
+        await admin_notify(author_id, f"Your {r['target_type']} was removed by Glint. Reason: {reason}", r["target_id"])
+    await db.reports.update_one({"id": report_id}, {"$set": {"status": "resolved", "resolution_reason": reason, "resolved_at": ts}})
+    await admin_audit("delete_reported_content", r["target_type"], r["target_id"], reason, author_id, {"report_id": report_id})
     return {"ok": True}
 
 
