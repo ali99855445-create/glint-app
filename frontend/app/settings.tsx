@@ -82,7 +82,7 @@ export default function Settings() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Glint</Text>
-          <Row icon="ribbon-outline" label="Get verified (Golden Tick)" onPress={() => router.push("/verification")} testID="settings-verification" />
+          <Row icon="ribbon-outline" label="Get verified (Blue Tick)" onPress={() => router.push("/verification")} testID="settings-verification" />
           <Row icon="help-buoy-outline" label="Help Center" onPress={() => router.push("/help")} testID="settings-help" />
           <Row icon="shield-checkmark-outline" label="Admin panel" onPress={() => router.push("/admin/login")} testID="settings-admin" />
         </View>
