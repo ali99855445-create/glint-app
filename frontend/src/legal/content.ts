@@ -76,7 +76,7 @@ export const LEGAL_DOCS: Record<string, LegalDoc> = {
       },
       {
         heading: "2. Information You Give Us",
-        body: "• Account data: full name, username, email or phone number, and password (stored only as a secure hash).\n• Profile data: avatar, cover photo, bio, and location (all optional).\n• Content: posts, polls, stories, voice notes, messages, comments, and reactions you create.\n• Verification data: documents you submit for the Golden Tick, used only for review.\n• Support data: help tickets and reports you file.",
+        body: "• Account data: full name, username, email or phone number, and password (stored only as a secure hash).\n• Profile data: avatar, cover photo, bio, and location (all optional).\n• Content: posts, polls, stories, voice notes, messages, comments, and reactions you create.\n• Verification data: documents you submit for the Blue Tick, used only for review.\n• Support data: help tickets and reports you file.",
       },
       {
         heading: "3. Information Collected Automatically",
