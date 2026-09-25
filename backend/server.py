@@ -2,6 +2,9 @@ import os
 import uuid
 import random
 import logging
+import smtplib
+import ssl
+from email.message import EmailMessage
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
@@ -33,6 +36,15 @@ ADMIN_CREDS = [
     (os.environ.get('ADMIN_EMAIL_2', ''), os.environ.get('ADMIN_PASSWORD_2', '')),
 ]
 
+SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM_EMAIL = os.environ.get("SMTP_FROM_EMAIL", SMTP_USERNAME).strip()
+SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "Glint").strip() or "Glint"
+SMTP_SECURITY = os.environ.get("SMTP_SECURITY", "ssl").strip().lower()
+DEV_OTP_ENABLED = os.environ.get("DEV_OTP_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+
 app = FastAPI()
 api = APIRouter(prefix="/api")
 
@@ -61,6 +73,55 @@ def verify_pw(pw: str, hashed: str) -> bool:
     try:
         return bcrypt.checkpw(pw.encode(), hashed.encode())
     except Exception:
+        return False
+
+
+def _send_email_sync(to_email: str, subject: str, body: str) -> None:
+    if not (SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM_EMAIL):
+        raise RuntimeError("SMTP is not configured")
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    context = ssl.create_default_context()
+    if SMTP_SECURITY == "ssl":
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=20) as server:
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(msg)
+    else:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(msg)
+
+
+async def send_otp_email(to_email: str, code: str, purpose: str) -> bool:
+    if not (SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM_EMAIL):
+        logger.warning("SMTP is not configured; email OTP was not sent")
+        return False
+
+    if purpose == "reset":
+        subject = "Glint password reset code"
+        intro = "Use this code to reset your Glint password:"
+    else:
+        subject = "Your Glint verification code"
+        intro = "Use this code to verify your Glint account:"
+
+    body = (
+        f"{intro}\n\n"
+        f"{code}\n\n"
+        "This code is for your Glint account. If you did not request it, you can ignore this email."
+    )
+    try:
+        await run_in_threadpool(_send_email_sync, to_email, subject, body)
+        return True
+    except Exception:
+        logger.exception("Failed to send OTP email")
         return False
 
 
@@ -339,8 +400,18 @@ async def register_init(body: RegisterInit):
     # remove any stale unverified signup for same username
     await db.users.delete_many({"username": username, "verified": False})
     await db.users.insert_one(doc)
-    logger.info(f"[OTP] signup code for {contact}: {code}")
-    return {"user_id": uid, "dev_otp": code, "message": "OTP sent"}
+    logger.info(f"[OTP] signup code generated for {contact}")
+    if field == "email":
+        sent = await send_otp_email(contact, code, "signup")
+        if not sent and not DEV_OTP_ENABLED:
+            raise HTTPException(503, "Unable to send verification email. Please try again later.")
+    elif not DEV_OTP_ENABLED:
+        raise HTTPException(503, "Phone OTP is not configured yet")
+
+    response = {"user_id": uid, "message": "OTP sent"}
+    if DEV_OTP_ENABLED:
+        response["dev_otp"] = code
+    return response
 
 
 @api.post("/auth/verify-otp")
@@ -363,8 +434,19 @@ async def resend_otp(body: VerifyOtp):
         raise HTTPException(404, "User not found")
     code = f"{random.randint(0, 999999):06d}"
     await db.users.update_one({"id": body.user_id}, {"$set": {"otp": code}})
-    logger.info(f"[OTP] resend for {u.get('username')}: {code}")
-    return {"dev_otp": code, "message": "OTP resent"}
+    logger.info(f"[OTP] resend generated for {u.get('username')}")
+    email = u.get("email")
+    if email:
+        sent = await send_otp_email(email, code, "signup")
+        if not sent and not DEV_OTP_ENABLED:
+            raise HTTPException(503, "Unable to resend verification email. Please try again later.")
+    elif not DEV_OTP_ENABLED:
+        raise HTTPException(503, "Phone OTP is not configured yet")
+
+    response = {"message": "OTP resent"}
+    if DEV_OTP_ENABLED:
+        response["dev_otp"] = code
+    return response
 
 
 @api.post("/auth/login")
@@ -396,8 +478,19 @@ async def forgot(body: ForgotBody):
         raise HTTPException(404, "No account found with these details")
     code = f"{random.randint(0, 999999):06d}"
     await db.users.update_one({"id": u["id"]}, {"$set": {"otp": code, "otp_purpose": "reset"}})
-    logger.info(f"[OTP] reset for {u.get('username')}: {code}")
-    return {"user_id": u["id"], "dev_otp": code, "message": "Reset code sent"}
+    logger.info(f"[OTP] reset code generated for {u.get('username')}")
+    email = u.get("email")
+    if email:
+        sent = await send_otp_email(email, code, "reset")
+        if not sent and not DEV_OTP_ENABLED:
+            raise HTTPException(503, "Unable to send reset email. Please try again later.")
+    elif not DEV_OTP_ENABLED:
+        raise HTTPException(503, "Phone password reset is not configured yet")
+
+    response = {"user_id": u["id"], "message": "Reset code sent"}
+    if DEV_OTP_ENABLED:
+        response["dev_otp"] = code
+    return response
 
 
 @api.post("/auth/reset")
