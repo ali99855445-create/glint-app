@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      EXPO_PUBLIC_BACKEND_URL: http://187.77.82.145:5000
+      EXPO_PUBLIC_BACKEND_URL: https://glint-api-xf2i.onrender.com
 
     steps:
       - name: Checkout Code
