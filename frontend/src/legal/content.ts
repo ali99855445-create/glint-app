@@ -24,8 +24,8 @@ export const LEGAL_DOCS: Record<string, LegalDoc> = {
         body: "You own the photos, videos, voice notes, text, polls, and stories you post (\"Content\"). By posting, you grant Glint a worldwide, non-exclusive, royalty-free license to host, store, reproduce, display, and distribute your Content solely to operate and improve the Service. This license ends when you delete your Content or account, except where Content has been shared by others or retained for legal obligations.",
       },
       {
-        heading: "5. Golden Tick Verification",
-        body: "The Golden Tick is a badge of authenticity granted at our discretion after review of submitted documents. It confirms identity — not endorsement. Misuse of verification documents, or attempting to buy, sell, or transfer a Golden Tick, results in immediate badge removal and possible suspension.",
+        heading: "5. Blue Tick Verification",
+        body: "The Blue Tick is a badge of authenticity granted at our discretion after review of submitted documents. It confirms identity — not endorsement. Misuse of verification documents, or attempting to buy, sell, or transfer a Blue Tick, results in immediate badge removal and possible suspension.",
       },
       {
         heading: "6. Sparks & Virtual Items",
@@ -45,7 +45,7 @@ export const LEGAL_DOCS: Record<string, LegalDoc> = {
       },
       {
         heading: "10. Intellectual Property",
-        body: "The Glint name, logo, Golden Tick design, app design, and all software are our property. You may not copy, modify, distribute, sell, or reverse-engineer any part of the Service without written permission.",
+        body: "The Glint name, logo, Blue Tick design, app design, and all software are our property. You may not copy, modify, distribute, sell, or reverse-engineer any part of the Service without written permission.",
       },
       {
         heading: "11. Disclaimers & Liability",
@@ -127,11 +127,11 @@ export const LEGAL_DOCS: Record<string, LegalDoc> = {
     sections: [
       {
         heading: "1. Our Golden Rule",
-        body: "Glint is a place to shine — not to dim others. Treat every member with respect. Content and behavior that harm, harass, or endanger people have no place here. These Standards apply to posts, stories, voice notes, messages, profiles, usernames, and Golden Tick applications.",
+        body: "Glint is a place to shine — not to dim others. Treat every member with respect. Content and behavior that harm, harass, or endanger people have no place here. These Standards apply to posts, stories, voice notes, messages, profiles, usernames, and Blue Tick applications.",
       },
       {
         heading: "2. Be Authentic",
-        body: "Use your real identity and don't impersonate people, brands, or organizations. Parody or fan accounts must be clearly labeled. Do not misrepresent verification status or forge Golden Tick badges.",
+        body: "Use your real identity and don't impersonate people, brands, or organizations. Parody or fan accounts must be clearly labeled. Do not misrepresent verification status or forge Blue Tick badges.",
       },
       {
         heading: "3. Harassment & Bullying",
