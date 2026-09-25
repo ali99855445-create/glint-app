@@ -363,6 +363,7 @@ class GroupCreate(BaseModel):
 
 class VerificationSubmit(BaseModel):
     document: str
+    selfie: str
     full_legal_name: str
     note: Optional[str] = None
 
@@ -444,6 +445,7 @@ async def register_init(body: RegisterInit):
         "bio": None,
         "location": None,
         "verified": False,  # email/phone OTP verified
+        "phone_verified": False,
         "golden_tick": False,
         "sparks": 50,
         "inner_circle": [],
@@ -479,7 +481,10 @@ async def verify_otp(body: VerifyOtp):
         raise HTTPException(404, "User not found")
     if u.get("otp") != body.code:
         raise HTTPException(400, "Invalid OTP code")
-    await db.users.update_one({"id": body.user_id}, {"$set": {"verified": True, "otp": None}})
+    verify_update = {"verified": True, "otp": None}
+    if u.get("phone"):
+        verify_update["phone_verified"] = True
+    await db.users.update_one({"id": body.user_id}, {"$set": verify_update})
     token = make_token(body.user_id)
     fresh = await db.users.find_one({"id": body.user_id}, {"_id": 0})
     return {"token": token, "user": public_user(fresh)}
@@ -574,6 +579,7 @@ async def get_me(me=Depends(get_current_user)):
     data.update({
         "email": me.get("email"),
         "phone": me.get("phone"),
+        "phone_verified": bool(me.get("phone_verified")) or bool(me.get("phone") and me.get("verified")),
         "sparks": me.get("sparks", 0),
         "inner_circle_count": len(me.get("inner_circle", [])),
         "counts": {"saved": saved, "friends": friends, "posts": posts},
@@ -1508,6 +1514,27 @@ async def unread_count(me=Depends(get_current_user)):
 
 
 # ----------------------------- verification -----------------------------
+def verification_eligibility(user: dict) -> dict:
+    age_days = 0
+    raw_created = user.get("created_at")
+    if raw_created:
+        try:
+            created = datetime.fromisoformat(str(raw_created).replace("Z", "+00:00"))
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            age_days = max(0, (datetime.now(timezone.utc) - created).days)
+        except Exception:
+            age_days = 0
+
+    phone_verified = bool(user.get("phone_verified")) or bool(user.get("phone") and user.get("verified"))
+    return {
+        "account_age_days": age_days,
+        "account_old_enough": age_days >= 60,
+        "phone_added": bool(user.get("phone")),
+        "phone_verified": phone_verified,
+    }
+
+
 @api.post("/verification")
 async def submit_verification(body: VerificationSubmit, me=Depends(get_current_user)):
     existing = await db.verifications.find_one({"user_id": me["id"], "status": "pending"})
@@ -1515,10 +1542,23 @@ async def submit_verification(body: VerificationSubmit, me=Depends(get_current_u
         raise HTTPException(400, "You already have a pending request")
     if me.get("golden_tick"):
         raise HTTPException(400, "You are already verified")
+
+    eligibility = verification_eligibility(me)
+    if not eligibility["account_old_enough"]:
+        raise HTTPException(400, "Account must be at least 2 months old")
+    if not eligibility["phone_verified"]:
+        raise HTTPException(400, "A verified phone number is required")
+
     await db.verifications.insert_one({
-        "id": new_id(), "user_id": me["id"], "document": body.document,
-        "full_legal_name": body.full_legal_name, "note": body.note,
-        "status": "pending", "created_at": now_iso(),
+        "id": new_id(),
+        "user_id": me["id"],
+        "document": body.document,
+        "selfie": body.selfie,
+        "full_legal_name": body.full_legal_name,
+        "note": body.note,
+        "eligibility_snapshot": eligibility,
+        "status": "pending",
+        "created_at": now_iso(),
     })
     return {"ok": True}
 
@@ -1526,7 +1566,9 @@ async def submit_verification(body: VerificationSubmit, me=Depends(get_current_u
 @api.get("/verification/me")
 async def my_verification(me=Depends(get_current_user)):
     v = await db.verifications.find_one({"user_id": me["id"]}, {"_id": 0}, sort=[("created_at", -1)])
-    return v or {"status": "none"}
+    payload = v or {"status": "none"}
+    payload["eligibility"] = verification_eligibility(me)
+    return payload
 
 
 # ----------------------------- help center -----------------------------
