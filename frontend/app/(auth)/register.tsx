@@ -64,7 +64,7 @@ export default function Register() {
       });
       setUserId(res.user_id);
       setOtpSent(true);
-      toast.show(`Verification code: ${res.dev_otp}`, "info");
+      toast.show(res.dev_otp ? `Verification code: ${res.dev_otp}` : (res.message || "Verification code sent to your email"), "info");
     } catch (e: any) {
       toast.show(e.message, "error");
     } finally {

@@ -50,6 +50,9 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "productionApiUrl": ""
     }
   }
 }

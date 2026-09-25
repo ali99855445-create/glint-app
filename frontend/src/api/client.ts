@@ -1,7 +1,12 @@
 import { Platform } from "react-native";
+import Constants from "expo-constants";
 import { storage } from "@/src/utils/storage";
 
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
+// In production builds, the app talks to YOUR own backend (Render),
+// configured in app.json -> expo.extra.productionApiUrl.
+// In development/preview (__DEV__), it keeps using the Emergent preview backend.
+const PROD_BASE = ((Constants.expoConfig?.extra as any)?.productionApiUrl as string) || "";
+const BASE = !__DEV__ && PROD_BASE ? PROD_BASE : process.env.EXPO_PUBLIC_BACKEND_URL;
 export const API = `${BASE}/api`;
 
 export const TOKEN_KEY = "glint_token";

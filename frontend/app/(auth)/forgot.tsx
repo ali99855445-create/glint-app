@@ -32,7 +32,7 @@ export default function Forgot() {
       const res = await api.post("/auth/forgot", { contact: contact.trim() });
       setUserId(res.user_id);
       setStage("reset");
-      toast.show(`Reset code: ${res.dev_otp}`, "info");
+      toast.show(res.dev_otp ? `Reset code: ${res.dev_otp}` : (res.message || "Reset code sent to your email"), "info");
     } catch (e: any) {
       toast.show(e.message, "error");
     } finally {

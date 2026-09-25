@@ -17,6 +17,7 @@ import jwt
 import bcrypt
 
 import storage_helper
+import emailer
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -339,6 +340,16 @@ async def register_init(body: RegisterInit):
     # remove any stale unverified signup for same username
     await db.users.delete_many({"username": username, "verified": False})
     await db.users.insert_one(doc)
+    # Send a real OTP email when SMTP is configured (production); else keep the
+    # simulated dev/preview behavior that returns the code to the client.
+    if emailer.smtp_configured() and field == "email":
+        try:
+            await emailer.send_otp_email(contact, code, "signup")
+        except Exception as e:
+            logger.error(f"SMTP send failed for {contact}: {e}")
+            await db.users.delete_many({"id": uid})
+            raise HTTPException(503, "Verification email could not be sent. Please try again.")
+        return {"user_id": uid, "message": "Verification code sent to your email"}
     logger.info(f"[OTP] signup code for {contact}: {code}")
     return {"user_id": uid, "dev_otp": code, "message": "OTP sent"}
 
@@ -363,6 +374,14 @@ async def resend_otp(body: VerifyOtp):
         raise HTTPException(404, "User not found")
     code = f"{random.randint(0, 999999):06d}"
     await db.users.update_one({"id": body.user_id}, {"$set": {"otp": code}})
+    email_addr = u.get("email")
+    if emailer.smtp_configured() and email_addr:
+        try:
+            await emailer.send_otp_email(email_addr, code, "signup")
+        except Exception as e:
+            logger.error(f"SMTP resend failed for {email_addr}: {e}")
+            raise HTTPException(503, "Verification email could not be sent. Please try again.")
+        return {"message": "Verification code resent to your email"}
     logger.info(f"[OTP] resend for {u.get('username')}: {code}")
     return {"dev_otp": code, "message": "OTP resent"}
 
@@ -396,6 +415,14 @@ async def forgot(body: ForgotBody):
         raise HTTPException(404, "No account found with these details")
     code = f"{random.randint(0, 999999):06d}"
     await db.users.update_one({"id": u["id"]}, {"$set": {"otp": code, "otp_purpose": "reset"}})
+    email_addr = u.get("email")
+    if emailer.smtp_configured() and email_addr:
+        try:
+            await emailer.send_otp_email(email_addr, code, "reset")
+        except Exception as e:
+            logger.error(f"SMTP reset send failed for {email_addr}: {e}")
+            raise HTTPException(503, "Reset email could not be sent. Please try again.")
+        return {"user_id": u["id"], "message": "Reset code sent to your email"}
     logger.info(f"[OTP] reset for {u.get('username')}: {code}")
     return {"user_id": u["id"], "dev_otp": code, "message": "Reset code sent"}
 
