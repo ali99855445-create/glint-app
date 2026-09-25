@@ -13,7 +13,7 @@ import { useToast } from "@/src/components/Toast";
 import { storage } from "@/src/utils/storage";
 import { timeAgo } from "@/src/lib/time";
 
-const TABS = ["Tickets", "Verify", "Reports", "Users", "Broadcast"];
+const TABS = ["Tickets", "Verify", "Reports", "Users", "Audit", "Broadcast"];
 
 export default function AdminDashboard() {
   const styles = useStyles();
@@ -25,6 +25,8 @@ export default function AdminDashboard() {
   const [tab, setTab] = useState("Tickets");
   const [replyModal, setReplyModal] = useState<{ id: string } | null>(null);
   const [replyText, setReplyText] = useState("");
+  const [reportDeleteModal, setReportDeleteModal] = useState<{ id: string } | null>(null);
+  const [moderationReason, setModerationReason] = useState("");
   const [broadcastMsg, setBroadcastMsg] = useState("");
   const [broadcastActive, setBroadcastActive] = useState(true);
   const [forceActive, setForceActive] = useState(false);
@@ -34,6 +36,7 @@ export default function AdminDashboard() {
   const tickets = useQuery_admin("tickets", "/admin/tickets", tab === "Tickets");
   const verifications = useQuery_admin("verifications", "/admin/verifications", tab === "Verify");
   const reports = useQuery_admin("reports", "/admin/reports", tab === "Reports");
+  const audit = useQuery_admin("audit", "/admin/audit", tab === "Audit");
   const users = useQuery({ queryKey: ["admin-users", userQuery], queryFn: () => api.get(`/admin/users?q=${encodeURIComponent(userQuery)}`, true), enabled: tab === "Users" });
 
   function useQuery_admin(key: string, path: string, enabled: boolean) {
@@ -48,10 +51,8 @@ export default function AdminDashboard() {
   });
   const approveV = useMutation({ mutationFn: (id: string) => api.post(`/admin/verifications/${id}/approve`, {}, true), onSuccess: () => { toast.show("Approved — Blue Tick granted", "success"); verifications.refetch(); stats.refetch(); } });
   const rejectV = useMutation({ mutationFn: (id: string) => api.post(`/admin/verifications/${id}/reject`, {}, true), onSuccess: () => { toast.show("Rejected", "info"); verifications.refetch(); } });
-  const delContent = useMutation({ mutationFn: (id: string) => api.post(`/admin/reports/${id}/delete-content`, {}, true), onSuccess: () => { toast.show("Content removed", "success"); reports.refetch(); stats.refetch(); } });
+  const delContent = useMutation({ mutationFn: () => api.post(`/admin/reports/${reportDeleteModal!.id}/delete-content`, { reason: moderationReason.trim() }, true), onSuccess: () => { toast.show("Content removed", "success"); setReportDeleteModal(null); setModerationReason(""); reports.refetch(); stats.refetch(); qc.invalidateQueries({ queryKey: ["admin-audit"] }); } });
   const dismissReport = useMutation({ mutationFn: (id: string) => api.post(`/admin/reports/${id}/dismiss`, {}, true), onSuccess: () => { reports.refetch(); stats.refetch(); } });
-  const suspendUser = useMutation({ mutationFn: (id: string) => api.post(`/admin/users/${id}/suspend`, {}, true), onSuccess: (d) => { toast.show(d.suspended ? "User suspended" : "User restored", "success"); users.refetch(); } });
-  const deleteUser = useMutation({ mutationFn: (id: string) => api.del(`/admin/users/${id}`, true), onSuccess: () => { toast.show("User deleted", "success"); users.refetch(); stats.refetch(); } });
   const sendBroadcast = useMutation({ mutationFn: () => api.post("/admin/broadcast", { message: broadcastMsg, active: broadcastActive }, true), onSuccess: () => toast.show("Broadcast sent to all users", "success") });
   const setForce = useMutation({ mutationFn: (active: boolean) => api.post("/admin/force-update", { active, message: "A new version of Glint is available. Please update." }, true), onSuccess: () => toast.show("Force update setting saved", "success") });
 
@@ -81,6 +82,8 @@ export default function AdminDashboard() {
           <Stat icon="ribbon" label="Pending Verify" value={S.pending_verifications} />
           <Stat icon="help-buoy" label="Open Tickets" value={S.open_tickets} />
           <Stat icon="flag" label="Reports" value={S.open_reports} />
+          <Stat icon="ban" label="Suspended" value={S.suspended_users} />
+          <Stat icon="checkmark-circle" label="Blue Tick" value={S.blue_tick_users} />
         </View>
 
         {/* tabs */}
@@ -149,7 +152,7 @@ export default function AdminDashboard() {
                   {r.target?.text ? <Text style={styles.quoted}>&quot;{r.target.text}&quot;</Text> : null}
                   {r.target?.image && <Image source={{ uri: fileUrl(r.target.image) }} style={styles.attachImg} contentFit="cover" />}
                   <View style={styles.actionRow}>
-                    <Button title="Delete content" small variant="danger" onPress={() => delContent.mutate(r.id)} testID={`admin-delcontent-${r.id}`} style={{ flex: 1 }} />
+                    <Button title="Delete content" small variant="danger" onPress={() => { setReportDeleteModal({ id: r.id }); setModerationReason(""); }} testID={`admin-delcontent-${r.id}`} style={{ flex: 1 }} />
                     <Button title="Dismiss" small variant="secondary" onPress={() => dismissReport.mutate(r.id)} testID={`admin-dismiss-${r.id}`} style={{ flex: 1 }} />
                   </View>
                 </View>
@@ -161,7 +164,7 @@ export default function AdminDashboard() {
             <View style={{ gap: spacing.sm }}>
               <View style={styles.searchWrap}>
                 <Icon name="search" size={18} color={colors.muted} />
-                <TextInput value={userQuery} onChangeText={setUserQuery} placeholder="Search users" placeholderTextColor={colors.muted} style={styles.searchInput} testID="admin-user-search" />
+                <TextInput value={userQuery} onChangeText={setUserQuery} placeholder="Search name, username, email or phone" placeholderTextColor={colors.muted} style={styles.searchInput} testID="admin-user-search" />
               </View>
               {users.isLoading ? <ActivityIndicator color={colors.brandPrimary} /> : (users.data || []).map((u: any) => (
                 <View key={u.id} style={styles.card}>
@@ -169,16 +172,29 @@ export default function AdminDashboard() {
                     <Avatar uri={u.avatar} name={u.full_name} size={44} />
                     <View style={{ flex: 1 }}>
                       <UserName name={u.full_name} verified={u.verified} size={15} />
-                      <Text style={styles.cardMeta}>@{u.username}{u.suspended ? " · suspended" : ""}</Text>
+                      <Text style={styles.cardMeta}>@{u.username}{u.suspended ? " · suspended" : ""}{u.blue_tick ? " · Blue Tick" : ""}</Text>
+                      <Text style={styles.cardMeta}>{u.email || u.phone || "No contact"}</Text>
                     </View>
-                  </View>
-                  <View style={styles.actionRow}>
-                    <Button title={u.suspended ? "Restore" : "Suspend"} small variant="secondary" onPress={() => suspendUser.mutate(u.id)} testID={`admin-suspend-${u.username}`} style={{ flex: 1 }} />
-                    <Button title="Delete" small variant="danger" onPress={() => deleteUser.mutate(u.id)} testID={`admin-deleteuser-${u.username}`} style={{ flex: 1 }} />
+                    <Pressable style={styles.viewBtn} onPress={() => router.push(`/admin/user/${u.id}`)} testID={`admin-view-${u.username}`}>
+                      <Text style={styles.viewBtnText}>View</Text>
+                      <Icon name="chevron-forward" size={16} color={colors.brand} />
+                    </Pressable>
                   </View>
                 </View>
               ))}
             </View>
+          )}
+
+          {tab === "Audit" && (
+            <Section loading={audit.isLoading} empty={!audit.data?.length} emptyText="No admin actions yet">
+              {(audit.data || []).map((a: any) => (
+                <View key={a.id} style={styles.card}>
+                  <Text style={styles.cardTitle}>{String(a.action || "").replaceAll("_", " ")}</Text>
+                  <Text style={styles.cardDesc}>{a.reason || "No reason recorded"}</Text>
+                  <Text style={styles.cardMeta}>{a.target_type} · {String(a.target_id || "").slice(0, 16)} · {timeAgo(a.created_at)}</Text>
+                </View>
+              ))}
+            </Section>
           )}
 
           {tab === "Broadcast" && (
@@ -214,6 +230,18 @@ export default function AdminDashboard() {
             <TextInput value={replyText} onChangeText={setReplyText} placeholder="Type your reply..." placeholderTextColor={colors.muted} style={styles.textArea} multiline testID="admin-reply-input" />
             <Button title="Send & resolve" onPress={() => replyText.trim() && resolveTicket.mutate()} loading={resolveTicket.isPending} testID="admin-reply-send" />
             <Pressable onPress={() => setReplyModal(null)} testID="admin-reply-cancel"><Text style={styles.cancel}>Cancel</Text></Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={!!reportDeleteModal} transparent animationType="fade" onRequestClose={() => setReportDeleteModal(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Delete reported content</Text>
+            <Text style={styles.cardMeta}>Write the reason. The content owner will be told this reason and the action will be saved in Audit.</Text>
+            <TextInput value={moderationReason} onChangeText={setModerationReason} placeholder="Reason for deletion..." placeholderTextColor={colors.muted} style={styles.textArea} multiline testID="admin-report-delete-reason" />
+            <Button title="Delete content" variant="danger" onPress={() => moderationReason.trim() && delContent.mutate()} loading={delContent.isPending} disabled={!moderationReason.trim()} testID="admin-report-delete-confirm" />
+            <Pressable onPress={() => setReportDeleteModal(null)}><Text style={styles.cancel}>Cancel</Text></Pressable>
           </View>
         </View>
       </Modal>
@@ -269,6 +297,8 @@ const useStyles = makeStyles((c) => ({
   actionRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
   searchWrap: { flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: c.surfaceTertiary, borderRadius: radius.pill, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
   searchInput: { flex: 1, color: c.onSurface, fontFamily: fonts.text, fontSize: 15 },
+  viewBtn: { flexDirection: "row", alignItems: "center", gap: 2, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, backgroundColor: c.brandTertiary, borderRadius: radius.pill },
+  viewBtnText: { color: c.brand, fontFamily: fonts.semibold, fontSize: 13 },
   textArea: { minHeight: 90, backgroundColor: c.surfaceTertiary, borderRadius: radius.md, padding: spacing.md, color: c.onSurface, fontFamily: fonts.text, fontSize: 15, textAlignVertical: "top", marginVertical: spacing.sm },
   switchRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: spacing.sm },
   switchLabel: { color: c.onSurface, fontFamily: fonts.medium, fontSize: 15 },
