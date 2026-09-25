@@ -3,9 +3,11 @@
 Priority:
   1. User's own S3-compatible bucket (AWS S3 / Cloudflare R2) when ALL of:
      S3_ENDPOINT_URL, S3_REGION, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY are set.
-  2. Emergent Managed Object Storage (dev/preview fallback).
+  2. User's own server disk when LOCAL_STORAGE_DIR is set (self-hosted, e.g. Render persistent disk).
+  3. Emergent Managed Object Storage (dev/preview fallback).
 """
 import os
+import pathlib
 import requests
 
 APP_NAME = "glint"
@@ -18,6 +20,18 @@ S3_VARS = ("S3_ENDPOINT_URL", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_
 
 def s3_enabled() -> bool:
     return all((os.environ.get(name) or "").strip() for name in S3_VARS)
+
+
+def local_dir() -> str:
+    return (os.environ.get("LOCAL_STORAGE_DIR") or "").strip()
+
+
+def _local_path(path: str) -> pathlib.Path:
+    # path is server-generated (glint/uploads/<uid>/<uuid>.<ext>); guard traversal anyway
+    clean = path.lstrip("/")
+    if ".." in clean.split("/"):
+        raise ValueError("invalid storage path")
+    return pathlib.Path(local_dir()) / clean
 
 
 def _s3():
@@ -71,6 +85,12 @@ def put_object(path: str, data: bytes, content_type: str) -> dict:
         )
         return {"path": path}
 
+    if local_dir():
+        dest = _local_path(path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return {"path": path}
+
     STORAGE_URL = _urls()
     key = init_storage()
     resp = requests.put(
@@ -96,6 +116,13 @@ def get_object(path: str):
     if s3_enabled():
         obj = _s3().get_object(Bucket=os.environ["S3_BUCKET"].strip(), Key=path)
         return obj["Body"].read(), obj.get("ContentType", "application/octet-stream")
+
+    if local_dir():
+        import mimetypes
+
+        fp = _local_path(path)
+        data = fp.read_bytes()
+        return data, mimetypes.guess_type(str(fp))[0] or "application/octet-stream"
 
     STORAGE_URL = _urls()
     key = init_storage()

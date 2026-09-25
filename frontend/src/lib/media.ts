@@ -12,10 +12,12 @@ export async function pickAndUploadImage(opts?: { aspect?: [number, number]; qua
   if (!perm.granted) {
     return { url: "", denied: true };
   }
+  // NOTE: allowsEditing (system crop screen) is intentionally disabled.
+  // On many Android devices the system crop UI has no visible Done/Save
+  // button, which blocked users from completing image selection entirely.
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ["images"],
-    allowsEditing: true,
-    aspect: opts?.aspect,
+    allowsEditing: false,
     quality: opts?.quality ?? 0.6,
   });
   if (result.canceled || !result.assets?.length) return null;

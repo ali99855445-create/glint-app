@@ -459,7 +459,9 @@ async def get_me(me=Depends(get_current_user)):
 
 @api.put("/users/me")
 async def update_me(body: ProfileUpdate, me=Depends(get_current_user)):
-    update = {k: v for k, v in body.dict().items() if v is not None}
+    # exclude_unset: fields the client explicitly sends as null ARE cleared;
+    # fields not sent at all are left untouched.
+    update = {k: v for k, v in body.dict(exclude_unset=True).items()}
     if update:
         await db.users.update_one({"id": me["id"]}, {"$set": update})
     fresh = await db.users.find_one({"id": me["id"]}, {"_id": 0})

@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 5: verified BOTH fixes. BUG A (allowsEditing crop screen removed): code check PASS — src/lib/media.ts:18-22 is the ONLY image-picker call site in the app (grep-verified), now uses allowsEditing: false and no longer passes `aspect` to the picker, so Android can never hit the buttonless system crop UI. Runtime (web preview): all 5 pick/upload flows complete IMMEDIATELY after file selection with no intermediate step and images render — photo post PASS (preview + appears in feed), photo story PASS (uploaded, shared, verified in /api/stories/feed, count 6 own stories), chat photo PASS (image rendered in Demo Friend conversation), help attachment PASS (ticket 'TEST_i5 upload regression' created with screenshot), edit-profile avatar upload PASS (new avatar persisted, verified via API: new file 3babb905...). BUG B (edit-profile prefill on cold mount): PASS — set bio/location to TEST_BIO_PREFILL/TEST_LOC_PREFILL first, then page.goto directly to /edit-profile (full reload, cold AuthContext): Full name/Bio/Location all prefilled correctly and avatar image rendered; Save WITHOUT changes did NOT wipe avatar/bio/location (verified via API); in-app navigation (Profile tab -> Edit) also prefilled. Backend upload regression suite re-run: 13/13 pytest PASSED. Login + feed render normally. Deprecated packages: NONE detected (no expo-av/barcode-scanner/background-fetch; expo-image-picker ~57, expo-file-system ~57). No react-native SafeAreaView usage. CAVEAT: Android-native crop-screen removal behavior itself can only be validated on the rebuilt APK — web preview has no crop UI regardless.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/users/me", "issue": "ProfileUpdate filters out None values (server.py:462), so bio/location/avatar/cover can NEVER be cleared back to null once set. Frontend edit-profile.tsx:70 sends `bio.trim() || null` expecting empty to clear — backend silently ignores it. Mismatch between UI intent and API behavior. Pre-existing, unrelated to this fix. Fixed my TEST bio/location directly in MongoDB after discovering this."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "expo-router (dev-only, carryover from iteration_4)", "issue": "'GO_BACK was not handled by any navigator' console warning + red dev toast after story share / edit-profile save when the screen is the root of the stack (only reproducible via direct URL load in web preview; in-app navigation unaffected). Non-blocking, dev-only. Reference: /app/frontend/app/story/create.tsx share handler, /app/frontend/app/edit-profile.tsx:73"}
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_5.json",
+    "/app/backend/tests/test_media_uploads.py",
+    "/app/test_reports/pytest/upload_regression_i5.xml"
+  ],
+  "action_items": [
+    "REQUIRED USER ACTION: rebuild the Android APK and verify on device that tapping a photo no longer opens any crop screen and the upload completes immediately (cannot be validated in web preview).",
+    "Optional (minor): make PUT /api/users/me support clearing nullable profile fields (e.g. accept explicit null for bio/location/avatar/cover via exclude_unset instead of filtering all None values).",
+    "Optional (LOW, carryover): guard router.back() after story share/save when screen is stack root (router.canGoBack() ? back : replace) to silence dev warning; Toast still overlaps screen headers at top."
+  ],
+  "critical_code_review_comments": [
+    "media.ts fix is correct and complete: allowsEditing: false, quality preserved, `aspect` opt retained in signature for backward compat but not forwarded to the picker. Single call site for the whole app — no other launchImageLibraryAsync/launchCameraAsync anywhere (grep-verified).",
+    "edit-profile.tsx fix (useEffect on user?.id syncing all 5 fields, lines 37-45) is correct; dependency on user?.id avoids clobbering in-progress edits on unrelated user-object refreshes. Verified both cold-mount and warm-nav paths.",
+    "server.py:462 `{k: v for k, v in body.dict().items() if v is not None}` makes profile fields one-way (set-only). Use body.dict(exclude_unset=True) to allow explicit nulls."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (13/13 pytest passed)", "frontend": "100% — BUG A + BUG B verified, all 5 upload flows + login/feed regression pass"},
+  "seed_data_creation": "TEST_-prefixed photo post, photo story, chat photo message, help ticket (TEST_i5) under demo user. TEST bio/location were set for prefill verification and cleaned up directly in MongoDB afterwards. Avatar replaced by test upload (red square PNG) as part of avatar-upload verification.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Both fixes VERIFIED on web preview. Welcome screen has no testIDs — click text 'I already have an account' to reach login. Field testIDs sit directly on the input. Story create opens in Text mode: click [data-testid=story-mode-photo] which auto-triggers the file chooser (wrap in expect_file_chooser). users/me fetch from page context returns 401 (token not in localStorage on web) — verify persistence via curl instead. Known non-blocking: GO_BACK dev warning on direct-URL loads, toast overlaps header, PUT /users/me cannot clear nullable fields.",
+  "rca_of_issue": "BUG A RCA: expo-image-picker allowsEditing:true opens device-dependent system crop UI; on the user's Android device that UI had no Done/Save/Confirm button, making selection impossible. Fix removes the crop step entirely (allowsEditing:false) — verified in code and across all 5 web pick flows; device-side verification pending on rebuilt APK. BUG B RCA: edit-profile.tsx captured AuthContext user (null on cold mount) in useState initializers and never re-synced -> empty fields and Save would send avatar=null/cover=null. Fixed with useEffect on user?.id — verified prefilled on direct URL load AND that an unchanged Save preserves avatar/bio/location server-side."
+}

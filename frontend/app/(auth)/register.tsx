@@ -87,20 +87,28 @@ export default function Register() {
   }
 
   async function uploadAvatar() {
-    const r = await pickAndUploadImage({ aspect: [1, 1] });
-    if (r?.denied) return toast.show("Photo permission needed", "error");
-    if (r?.url) {
-      setAvatar(r.url);
-      await api.put("/users/me", { avatar: r.url });
+    try {
+      const r = await pickAndUploadImage({ aspect: [1, 1] });
+      if (r?.denied) return toast.show("Photo permission needed", "error");
+      if (r?.url) {
+        setAvatar(r.url);
+        await api.put("/users/me", { avatar: r.url });
+      }
+    } catch (e: any) {
+      toast.show(e.message || "Upload failed", "error");
     }
   }
 
   async function uploadCover() {
-    const r = await pickAndUploadImage({ aspect: [16, 9] });
-    if (r?.denied) return toast.show("Photo permission needed", "error");
-    if (r?.url) {
-      setCover(r.url);
-      await api.put("/users/me", { cover: r.url });
+    try {
+      const r = await pickAndUploadImage({ aspect: [16, 9] });
+      if (r?.denied) return toast.show("Photo permission needed", "error");
+      if (r?.url) {
+        setCover(r.url);
+        await api.put("/users/me", { cover: r.url });
+      }
+    } catch (e: any) {
+      toast.show(e.message || "Upload failed", "error");
     }
   }
 

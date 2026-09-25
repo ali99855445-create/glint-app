@@ -2,7 +2,7 @@
   "expo": {
     "name": "Glint",
     "slug": "frontend",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "frontend",
@@ -22,7 +22,8 @@
         "backgroundColor": "#000000"
       },
       "package": "com.glinttechnologies.glint",
-      "permissions": ["RECORD_AUDIO"]
+      "versionCode": 2,
+      "permissions": ["RECORD_AUDIO", "READ_MEDIA_IMAGES", "READ_MEDIA_AUDIO", "READ_EXTERNAL_STORAGE"]
     },
     "web": {
       "bundler": "metro",

@@ -1,0 +1,57 @@
+{
+  "summary": "Media-upload fix regression (web branch). Backend: new suite /app/backend/tests/test_media_uploads.py — 13/13 pytest passed (multipart upload, file serving with token, 401/422 guards, and all consumers: avatar persist, photo post in feed, photo story, chat photo message, help ticket w/ screenshot, verification document, plus text-post/feed regression). Frontend web preview (375x667): login PASS; Edit Profile avatar upload PASS (picked real PNG via filechooser, preview updated, no error toast); photo post PASS (image preview + submit + post appears in feed with /api/files image); photo story PASS (shared, verified in /api/stories/feed with image); chat photo message PASS (image rendered in conversation DOM); help ticket with attachment PASS (created with screenshot); verification page correctly shows 'You're verified!' for the already-verified demo user (doc upload path verified at API level). Error handling PASS: intercepted /api/upload with forced 500 → visible red toast 'Storage unavailable' (testID=toast) and no image preview on both post composer and edit-profile — no more silent failures. One real bug found: edit-profile fields not prefilled on direct page load (see ui_bugs). No deprecated Expo packages detected; no react-native SafeAreaView usage. Native uploadAsync path is not exercisable in web preview (as noted by E1) — web fetch+FormData branch fully verified.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "edit-profile.tsx",
+        "issue": "useState initial values are captured from AuthContext user at mount (lines 27-31). On hard refresh / deep-link to /edit-profile, user is still null when the screen mounts, so Full name/Bio/Location/Avatar render EMPTY (verified: fields blank for Demo User) and Save is blocked with 'Name can't be empty'. Worse: if the user types a name and saves, the PUT sends avatar=null/cover=null/bio=null and WIPES existing profile media. In-app navigation (Profile tab -> Edit) is unaffected because AuthContext is warm. Fix: add useEffect to sync state when `user` loads, or gate rendering on user != null. Reference: /app/frontend/app/edit-profile.tsx:27-31",
+        "testID": "edit-fullname",
+        "priority": "HIGH"
+      },
+      {
+        "component": "Toast",
+        "issue": "Toast renders at the very top and overlaps the screen header title (observed 'Storage unavailable' overlapping 'New Post' and 'Edit Profile' titles). Cosmetic but hurts readability of both. Consider top offset = insets.top + header height, or bottom placement.",
+        "testID": "toast",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "post/create + edit-profile", "issues": ["Toast overlaps header title text when shown at top (see ui_bugs LOW item)"]}
+    ],
+    "react_native_issues": [
+      {"component": "expo-router (dev-only)", "issue": "Console warning 'The action GO_BACK was not handled by any navigator' after story share when the screen is the root of the stack (only reproducible via direct URL load in web preview; in-app navigation unaffected). Non-blocking. Reference: /app/frontend/app/story/create.tsx:98-101"}
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_4.json",
+    "/app/backend/tests/test_media_uploads.py",
+    "/app/test_reports/pytest/upload_results.xml"
+  ],
+  "action_items": [
+    "Fix edit-profile.tsx empty-prefill bug: sync form state via useEffect when AuthContext user resolves (or render a loading state until user != null) to avoid blocked saves and accidental wipe of avatar/cover/bio on web deep-links/refresh.",
+    "Optional: adjust Toast placement so it doesn't overlap screen headers.",
+    "Optional: guard router.back() after story share (router.canGoBack() ? back : replace('/(tabs)')).",
+    "No action needed on upload fix itself: web branch, error toasts, backend endpoint, storage fallback and all 9 consumer flows verified working."
+  ],
+  "critical_code_review_comments": [
+    "uploadFile web branch (client.ts:89-101) correctly throws with server detail on !res.ok; native branch (103-121) uses expo-file-system/legacy uploadAsync MULTIPART with status/data validation and descriptive errors. Both return tokenized /api/files URLs. Solid.",
+    "All 9 upload call sites now wrap pickAndUploadImage/uploadFile in try/catch with toast.show(...,'error') — verified in code for edit-profile, register, verification, help, chat, group chat, post create, story create, voice notes; runtime-verified for composer + edit-profile via forced 500.",
+    "storage_helper.py: S3 -> local disk -> Emergent fallback chain is clean; _local_path guards path traversal ('..' segment check). Upload endpoint returns 500 'Upload failed' on storage errors and files are access-controlled via JWT (header or query token) — 401 without token verified.",
+    "Backend /api/upload has no file-size or MIME allowlist validation — any authenticated user can upload any content type/size (ext taken from filename). Consider adding limits before production (non-blocking for this fix).",
+    "edit-profile.tsx state-from-props anti-pattern (lines 27-31) is the root cause of the only functional bug found — see ui_bugs."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_media_uploads.py (new — 13 upload regression tests)"
+  ],
+  "success_rate": {"backend": "100% (13/13 pytest passed)", "frontend": "~90% — all upload flows + error toasts pass; edit-profile save blocked on direct load by prefill bug (in-app nav path works)"},
+  "seed_data_creation": "Uploaded PNG files + TEST_-prefixed post, story, photo chat message, and two help tickets created under demo user (user@glint.app). Harmless to keep; identifiable by TEST prefix.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Upload bug fix is VERIFIED on web: fetch+FormData branch, all consumer flows, and visible error toasts on failure (test with page.route('**/api/upload', fulfill 500)). Native uploadAsync path cannot run in web preview — needs a device/APK test. Outstanding bug: edit-profile fields empty on direct load (useState from null AuthContext user, edit-profile.tsx:27-31) — after E1 fixes, retest by page.goto directly to /edit-profile after login and confirm fields are prefilled and save succeeds. Field testIDs sit directly on the input element (no nested ' input' selector needed). Image picking on web is automatable via page.expect_file_chooser after clicking the pick buttons.",
+  "rca_of_issue": "Original bug (silent native upload failures): fetch+FormData file uploads silently fail in production Android APKs; fixed by using FileSystem.uploadAsync MULTIPART on native and adding try/catch+toast at all call sites — fix confirmed correct on the web branch. New bug found this run: edit-profile.tsx initializes form state once from AuthContext `user` (null on cold mount) and never re-syncs -> empty fields, blocked save ('Name can't be empty'), and potential wipe of avatar/cover/bio with null on save. Repro: login -> page.goto('/edit-profile') directly -> fields empty. Mitigation: useEffect(() => { if (user) { setFullName(user.full_name||''); ... } }, [user]) or gate render on user."
+}

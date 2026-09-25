@@ -56,6 +56,8 @@ export default function CreatePost() {
       const r = await pickAndUploadImage({ quality: 0.6 });
       if (r?.denied) toast.show("Photo permission needed", "error");
       else if (r?.url) { setImage(r.url); setMode("photo"); }
+    } catch (e: any) {
+      toast.show(e.message || "Upload failed", "error");
     } finally {
       setUploading(false);
     }
