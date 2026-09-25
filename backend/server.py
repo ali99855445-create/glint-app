@@ -1502,17 +1502,14 @@ async def get_config(me=Depends(get_current_user)):
 @api.post("/upload")
 async def upload(file: UploadFile = File(...), me=Depends(get_current_user)):
     ext = (file.filename or "bin").split(".")[-1].lower()
-    path = f"{storage_helper.APP_NAME}/uploads/{me['id']}/{new_id()}.{ext}"
+    path = f"glint/uploads/{me['id']}/{new_id()}.{ext}"
     data = await file.read()
+    if len(data) > 12 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum size is 12 MB.")
     ct = file.content_type or "application/octet-stream"
-    try:
-        await run_in_threadpool(storage_helper.put_object, path, data, ct)
-    except Exception as e:
-        logger.error(f"upload failed: {e}")
-        raise HTTPException(500, "Upload failed")
     await db.files.insert_one({
         "id": new_id(), "path": path, "owner_id": me["id"],
-        "content_type": ct, "created_at": now_iso(),
+        "content_type": ct, "content": data, "created_at": now_iso(),
     })
     token = make_token(me["id"])
     return {"path": path, "url": f"/api/files/{path}", "token": token}
@@ -1537,14 +1534,9 @@ async def get_file(path: str, token: Optional[str] = Query(None), authorization:
     if not ok:
         raise HTTPException(401, "Not authenticated")
     meta = await db.files.find_one({"path": path})
-    if not meta:
+    if not meta or "content" not in meta:
         raise HTTPException(404, "File not found")
-    try:
-        content, ct = await run_in_threadpool(storage_helper.get_object, path)
-    except Exception as e:
-        logger.error(f"download failed: {e}")
-        raise HTTPException(404, "File not found")
-    return Response(content=content, media_type=ct)
+    return Response(content=bytes(meta["content"]), media_type=meta.get("content_type", "application/octet-stream"))
 
 
 # ----------------------------- admin -----------------------------
@@ -1724,11 +1716,6 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    try:
-        await run_in_threadpool(storage_helper.init_storage)
-        logger.info("Storage initialized")
-    except Exception as e:
-        logger.error(f"Storage init failed: {e}")
     await db.users.create_index("username")
     await db.users.create_index("email")
 
