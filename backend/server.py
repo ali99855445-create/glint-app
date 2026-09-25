@@ -7,6 +7,8 @@ import ssl
 import json
 import urllib.request
 import urllib.error
+import urllib.parse
+import base64
 from email.message import EmailMessage
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -48,6 +50,9 @@ SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "Glint").strip() or "Glint"
 SMTP_SECURITY = os.environ.get("SMTP_SECURITY", "ssl").strip().lower()
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
 RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", SMTP_FROM_EMAIL or "noreply@glinttest.com").strip()
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_VERIFY_SERVICE_SID = os.environ.get("TWILIO_VERIFY_SERVICE_SID", "").strip()
 DEV_OTP_ENABLED = os.environ.get("DEV_OTP_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 app = FastAPI()
@@ -197,6 +202,78 @@ async def active_suspension(user: dict) -> Optional[dict]:
         "reason": user.get("suspend_reason") or "Violation of Glint rules",
         "until": until,
     }
+
+
+def _twilio_verify_configured() -> bool:
+    return bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_VERIFY_SERVICE_SID)
+
+
+def normalize_phone(value: str) -> str:
+    raw = (value or "").strip()
+    cleaned = "+" + "".join(ch for ch in raw[1:] if ch.isdigit()) if raw.startswith("+") else ""
+    digits = cleaned[1:] if cleaned.startswith("+") else ""
+    if not cleaned or not digits.isdigit() or len(digits) < 8 or len(digits) > 15:
+        raise HTTPException(400, "Enter phone number with country code, for example +9665XXXXXXXX")
+    return cleaned
+
+
+def _twilio_basic_auth() -> str:
+    token = base64.b64encode(f"{TWILIO_ACCOUNT_SID}:{TWILIO_AUTH_TOKEN}".encode("utf-8")).decode("ascii")
+    return f"Basic {token}"
+
+
+def _twilio_verify_request_sync(path: str, payload: dict) -> dict:
+    if not _twilio_verify_configured():
+        raise RuntimeError("Twilio Verify is not configured")
+    body = urllib.parse.urlencode(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://verify.twilio.com/v2/Services/{TWILIO_VERIFY_SERVICE_SID}/{path}",
+        data=body,
+        headers={
+            "Authorization": _twilio_basic_auth(),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "Glint/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return data
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        logger.error("Twilio Verify HTTP %s: %s", exc.code, detail[:500])
+        raise
+
+
+async def send_phone_otp(phone: str) -> bool:
+    if not _twilio_verify_configured():
+        return False
+    try:
+        data = await run_in_threadpool(
+            _twilio_verify_request_sync,
+            "Verifications",
+            {"To": phone, "Channel": "sms"},
+        )
+        return data.get("status") in {"pending", "approved"}
+    except Exception:
+        logger.exception("Failed to start Twilio phone verification")
+        return False
+
+
+async def check_phone_otp(phone: str, code: str) -> bool:
+    if not _twilio_verify_configured():
+        return False
+    try:
+        data = await run_in_threadpool(
+            _twilio_verify_request_sync,
+            "VerificationCheck",
+            {"To": phone, "Code": code},
+        )
+        return data.get("status") == "approved"
+    except Exception:
+        logger.exception("Failed to check Twilio phone verification")
+        return False
 
 
 def make_token(user_id: str, is_admin: bool = False) -> str:
@@ -469,6 +546,8 @@ async def health():
         "mongodb": mongo_ok,
         "email_configured": email_ok,
         "email_provider": "resend" if RESEND_API_KEY else ("smtp" if email_ok else "none"),
+        "sms_configured": _twilio_verify_configured(),
+        "sms_provider": "twilio_verify" if _twilio_verify_configured() else "none",
     }
 
 
@@ -484,8 +563,8 @@ async def register_init(body: RegisterInit):
     existing = await db.users.find_one({"username": username, "deleted_at": None})
     if existing:
         raise HTTPException(400, "Username already taken")
-    contact = body.contact.strip().lower()
     field = "email" if body.method == "email" else "phone"
+    contact = body.contact.strip().lower() if field == "email" else normalize_phone(body.contact)
     dup = await db.users.find_one({field: contact, "verified": True, "deleted_at": None})
     if dup:
         raise HTTPException(400, f"An account with this {field} already exists")
@@ -524,8 +603,13 @@ async def register_init(body: RegisterInit):
         sent = await send_otp_email(contact, code, "signup")
         if not sent and not DEV_OTP_ENABLED:
             raise HTTPException(503, "Unable to send verification email. Please try again later.")
-    elif not DEV_OTP_ENABLED:
-        raise HTTPException(503, "Phone OTP is not configured yet")
+    else:
+        if DEV_OTP_ENABLED:
+            sent = True
+        else:
+            sent = await send_phone_otp(contact)
+        if not sent:
+            raise HTTPException(503, "Unable to send phone verification code. Check the phone number and try again.")
 
     response = {"user_id": uid, "message": "OTP sent"}
     if DEV_OTP_ENABLED:
@@ -538,7 +622,10 @@ async def verify_otp(body: VerifyOtp):
     u = await db.users.find_one({"id": body.user_id})
     if not u:
         raise HTTPException(404, "User not found")
-    if u.get("otp") != body.code:
+    if u.get("phone") and not DEV_OTP_ENABLED:
+        if not await check_phone_otp(u["phone"], body.code.strip()):
+            raise HTTPException(400, "Invalid or expired phone verification code")
+    elif u.get("otp") != body.code:
         raise HTTPException(400, "Invalid OTP code")
     verify_update = {"verified": True, "otp": None}
     if u.get("phone"):
@@ -558,12 +645,20 @@ async def resend_otp(body: VerifyOtp):
     await db.users.update_one({"id": body.user_id}, {"$set": {"otp": code}})
     logger.info(f"[OTP] resend generated for {u.get('username')}")
     email = u.get("email")
+    phone = u.get("phone")
     if email:
         sent = await send_otp_email(email, code, "signup")
         if not sent and not DEV_OTP_ENABLED:
             raise HTTPException(503, "Unable to resend verification email. Please try again later.")
-    elif not DEV_OTP_ENABLED:
-        raise HTTPException(503, "Phone OTP is not configured yet")
+    elif phone:
+        if DEV_OTP_ENABLED:
+            sent = True
+        else:
+            sent = await send_phone_otp(phone)
+        if not sent:
+            raise HTTPException(503, "Unable to resend phone verification code. Please try again later.")
+    else:
+        raise HTTPException(400, "No verification contact found")
 
     response = {"message": "OTP resent"}
     if DEV_OTP_ENABLED:
@@ -574,6 +669,8 @@ async def resend_otp(body: VerifyOtp):
 @api.post("/auth/login")
 async def login(body: LoginBody):
     contact = body.contact.strip().lower()
+    if contact.startswith("+"):
+        contact = normalize_phone(contact)
     u = await db.users.find_one({
         "$or": [{"email": contact}, {"phone": contact}, {"username": contact}],
     })
