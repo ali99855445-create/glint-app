@@ -32,7 +32,7 @@ export function Avatar({ uri, name, size = 44, ring }: { uri?: string | null; na
   );
 }
 
-export function GoldenTick({ size = 15 }: { size?: number }) {
+export function BlueTick({ size = 15 }: { size?: number }) {
   const { colors } = useTheme();
   const glow = useSharedValue(0);
   useEffect(() => {
@@ -44,10 +44,10 @@ export function GoldenTick({ size = 15 }: { size?: number }) {
   }));
 
   return (
-    <View testID="golden-tick" style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+    <View testID="blue-tick" style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
       <Animated.View
         style={[
-          { position: "absolute", width: size, height: size, borderRadius: size / 2, backgroundColor: colors.brandSecondary },
+          { position: "absolute", width: size, height: size, borderRadius: size / 2, backgroundColor: "#1D9BF0" },
           glowStyle,
         ]}
       />
@@ -56,12 +56,12 @@ export function GoldenTick({ size = 15 }: { size?: number }) {
           width: size,
           height: size,
           borderRadius: size / 2,
-          backgroundColor: colors.brandSecondary,
+          backgroundColor: "#1D9BF0",
           alignItems: "center",
           justifyContent: "center",
         }}
       >
-        <Icon name="checkmark" size={size * 0.72} color={colors.onBrandSecondary} />
+        <Icon name="checkmark" size={size * 0.72} color="#FFFFFF" />
       </View>
     </View>
   );
@@ -86,7 +86,7 @@ export function UserName({
       <Text style={{ color: color || colors.onSurface, fontFamily: bold ? fonts.semibold : fonts.text, fontSize: size }} numberOfLines={1}>
         {name}
       </Text>
-      {verified && <GoldenTick size={size} />}
+      {verified && <BlueTick size={size} />}
     </View>
   );
 }
