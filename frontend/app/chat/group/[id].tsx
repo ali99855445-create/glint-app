@@ -39,9 +39,13 @@ export default function GroupChat() {
     setText("");
   }
   async function sendPhoto() {
-    const r = await pickAndUploadImage({ quality: 0.6 });
-    if (r?.denied) return toast.show("Photo permission needed", "error");
-    if (r?.url) sendMut.mutate({ type: "photo", media: r.url });
+    try {
+      const r = await pickAndUploadImage({ quality: 0.6 });
+      if (r?.denied) return toast.show("Photo permission needed", "error");
+      if (r?.url) sendMut.mutate({ type: "photo", media: r.url });
+    } catch (e: any) {
+      toast.show(e.message || "Upload failed", "error");
+    }
   }
 
   const data = chat.data;
