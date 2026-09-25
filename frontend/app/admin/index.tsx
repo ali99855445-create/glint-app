@@ -127,7 +127,8 @@ export default function AdminDashboard() {
                     <View style={[styles.statusPill, { backgroundColor: colors.surfaceTertiary }]}><Text style={[styles.statusText, { color: colors.onSurfaceTertiary }]}>{v.status}</Text></View>
                   </View>
                   {v.note ? <Text style={styles.cardDesc}>{v.note}</Text> : null}
-                  {v.document && <Image source={{ uri: fileUrl(v.document) }} style={styles.attachImg} contentFit="cover" />}
+                  {v.document && (<><Text style={styles.cardMeta}>ID document</Text><Image source={{ uri: fileUrl(v.document) }} style={styles.attachImg} contentFit="cover" /></>)}
+                  {v.selfie && (<><Text style={styles.cardMeta}>Live selfie</Text><Image source={{ uri: fileUrl(v.selfie) }} style={styles.attachImg} contentFit="cover" /></>)}
                   {v.status === "pending" && (
                     <View style={styles.actionRow}>
                       <Button title="Approve" small onPress={() => approveV.mutate(v.id)} testID={`admin-approve-${v.id}`} style={{ flex: 1 }} />

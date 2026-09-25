@@ -1,6 +1,5 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { View, Text, StyleSheet } from "react-native";
-import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, withSequence, Easing } from "react-native-reanimated";
 import { Image } from "expo-image";
 import { useTheme, fonts } from "@/src/theme";
 import { fileUrl } from "@/src/api/client";
@@ -32,35 +31,33 @@ export function Avatar({ uri, name, size = 44, ring }: { uri?: string | null; na
   );
 }
 
+// Facebook-style verification seal: blue rosette with a crisp white check.
+// It is Glint's own implementation and does not use Meta/Facebook artwork.
 export function BlueTick({ size = 15 }: { size?: number }) {
-  const glow = useSharedValue(0);
-  useEffect(() => {
-    glow.value = withRepeat(withSequence(withTiming(1, { duration: 1100, easing: Easing.inOut(Easing.ease) }), withTiming(0, { duration: 1100, easing: Easing.inOut(Easing.ease) })), -1, false);
-  }, [glow]);
-  const glowStyle = useAnimatedStyle(() => ({
-    opacity: 0.25 + glow.value * 0.55,
-    transform: [{ scale: 1 + glow.value * 0.25 }],
-  }));
+  const blue = "#1877F2";
+  const petal = {
+    position: "absolute" as const,
+    width: size * 0.76,
+    height: size * 0.76,
+    borderRadius: Math.max(2, size * 0.12),
+    backgroundColor: blue,
+  };
 
   return (
     <View testID="blue-tick" style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
-      <Animated.View
-        style={[
-          { position: "absolute", width: size, height: size, borderRadius: size / 2, backgroundColor: "#1D9BF0" },
-          glowStyle,
-        ]}
-      />
+      <View style={[petal, { transform: [{ rotate: "0deg" }] }]} />
+      <View style={[petal, { transform: [{ rotate: "45deg" }] }]} />
       <View
         style={{
-          width: size,
-          height: size,
-          borderRadius: size / 2,
-          backgroundColor: "#1D9BF0",
+          width: size * 0.8,
+          height: size * 0.8,
+          borderRadius: size,
+          backgroundColor: blue,
           alignItems: "center",
           justifyContent: "center",
         }}
       >
-        <Icon name="checkmark" size={size * 0.72} color="#FFFFFF" />
+        <Icon name="checkmark" size={size * 0.62} color="#FFFFFF" />
       </View>
     </View>
   );

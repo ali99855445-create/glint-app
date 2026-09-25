@@ -3,42 +3,41 @@ import { StyleSheet, useColorScheme } from "react-native";
 
 export type ColorScheme = "light" | "dark";
 
-// Glint: STRICT Black & Golden theme. Both schemes resolve to the same
-// black-and-gold palette so no white background can ever appear.
+// Glint: clean white theme with soft green accents.
 const glint = {
-  surface: "#000000", // pure black canvas
-  onSurface: "#FFFFFF",
-  surfaceSecondary: "#0F0F0F", // near-black cards
-  onSurfaceSecondary: "#E5E7EB",
-  surfaceTertiary: "#1A1A1A", // inputs, chips, deepest nesting
-  onSurfaceTertiary: "#9CA3AF",
-  surfaceInverse: "#FFFFFF",
-  onSurfaceInverse: "#000000",
-  muted: "#9CA3AF",
-  brand: "#EAB308",
-  onBrand: "#000000",
-  brandPrimary: "#EAB308", // golden yellow — primary CTA, FAB, active nav, story rings
-  onBrandPrimary: "#000000",
-  brandSecondary: "#D97706", // deep gold — golden tick, banners
-  onBrandSecondary: "#000000",
-  brandTertiary: "#2A2308", // gold-tinted fill on black
-  onBrandTertiary: "#FDE68A",
-  success: "#22C55E",
-  onSuccess: "#000000",
+  surface: "#FFFFFF",
+  onSurface: "#111827",
+  surfaceSecondary: "#F8FBF9",
+  onSurfaceSecondary: "#374151",
+  surfaceTertiary: "#EEF8F1",
+  onSurfaceTertiary: "#5F6B64",
+  surfaceInverse: "#111827",
+  onSurfaceInverse: "#FFFFFF",
+  muted: "#6B7280",
+  brand: "#67C587",
+  onBrand: "#12331D",
+  brandPrimary: "#8BD5A4",
+  onBrandPrimary: "#12331D",
+  brandSecondary: "#5ABC7A",
+  onBrandSecondary: "#12331D",
+  brandTertiary: "#E7F7EC",
+  onBrandTertiary: "#25633A",
+  success: "#22A35A",
+  onSuccess: "#FFFFFF",
   warning: "#F59E0B",
-  onWarning: "#000000",
+  onWarning: "#111827",
   error: "#EF4444",
-  onError: "#000000",
-  info: "#9CA3AF",
-  onInfo: "#000000",
-  border: "#262626",
-  borderStrong: "#3A3A3A",
-  divider: "#1F1F1F",
-};
+  onError: "#FFFFFF",
+  info: "#3B82F6",
+  onInfo: "#FFFFFF",
+  border: "#DDE7E0",
+  borderStrong: "#C7D6CC",
+  divider: "#E8EEE9",
+}
 
 export type ThemeColors = typeof glint;
 
-export const defaultScheme = "dark" satisfies ColorScheme;
+export const defaultScheme = "light" satisfies ColorScheme;
 
 export const themes: { light: ThemeColors; dark?: ThemeColors } = { light: glint, dark: glint };
 
@@ -67,9 +66,9 @@ export const STORY_BG_COLORS = [
   "#EC4899", "#F97316", "#1A1A1A", "#059669", "#DB2777",
 ];
 
-// Theme is locked: Glint ships one signature black & gold look.
+// Theme is locked to Glint's white + soft-green visual system.
 export function useTheme(): { scheme: ColorScheme; colors: ThemeColors } {
-  return { scheme: "dark", colors: glint };
+  return { scheme: "light", colors: glint };
 }
 
 export function makeStyles<T extends StyleSheet.NamedStyles<T> | StyleSheet.NamedStyles<any>>(

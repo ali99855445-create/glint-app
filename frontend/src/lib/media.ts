@@ -27,3 +27,28 @@ export async function pickAndUploadImage(opts?: { aspect?: [number, number]; qua
   const url = await uploadFile(asset.uri, name, type);
   return { url };
 }
+
+
+/**
+ * Open the device camera for a fresh selfie/photo, then upload it.
+ * This intentionally does not allow gallery selection.
+ */
+export async function takeAndUploadSelfie(quality = 0.7): Promise<
+  { url: string; denied?: boolean } | null
+> {
+  const perm = await ImagePicker.requestCameraPermissionsAsync();
+  if (!perm.granted) {
+    return { url: "", denied: true };
+  }
+  const result = await ImagePicker.launchCameraAsync({
+    mediaTypes: ["images"],
+    allowsEditing: false,
+    quality,
+  });
+  if (result.canceled || !result.assets?.length) return null;
+  const asset = result.assets[0];
+  const name = asset.fileName || `selfie_${Date.now()}.jpg`;
+  const type = asset.mimeType || "image/jpeg";
+  const url = await uploadFile(asset.uri, name, type);
+  return { url };
+}

@@ -21,7 +21,7 @@ export default function Root({ children }: PropsWithChildren) {
         <style
           dangerouslySetInnerHTML={{
             __html: `
-              html, body { background-color: #000000 !important; }
+              html, body { background-color: #FFFFFF !important; }
               body > div:first-child { position: fixed !important; top: 0; left: 0; right: 0; bottom: 0; }
               [role="tablist"] [role="tab"] * { overflow: visible !important; }
               [role="heading"], [role="heading"] * { overflow: visible !important; }
@@ -36,7 +36,7 @@ export default function Root({ children }: PropsWithChildren) {
           overflow: "hidden",
           display: "flex",
           flexDirection: "column",
-          backgroundColor: "#000000",
+          backgroundColor: "#FFFFFF",
         }}
       >
         {children}

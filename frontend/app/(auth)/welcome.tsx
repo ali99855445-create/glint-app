@@ -13,7 +13,7 @@ export default function Welcome() {
   return (
     <View style={styles.root}>
       <LinearGradient
-        colors={["#171511", "#0B0B0A", "#000000"]}
+        colors={["#F7FCF9", "#EEF8F1", "#FFFFFF"]}
         style={StyleSheet.absoluteFill}
       />
       <View style={[styles.content, { paddingTop: insets.top + spacing.xl, paddingBottom: insets.bottom + spacing.xl }]}>
@@ -41,16 +41,16 @@ export default function Welcome() {
 }
 
 const useStyles = makeStyles((c) => ({
-  root: { flex: 1, backgroundColor: "#000000" },
+  root: { flex: 1, backgroundColor: "#FFFFFF" },
   content: { flex: 1, paddingHorizontal: spacing.xl, justifyContent: "space-between", paddingVertical: spacing.xl },
   brandTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   logoBadge: { width: 40, height: 40, borderRadius: radius.md, backgroundColor: c.brandPrimary, alignItems: "center", justifyContent: "center" },
   logoText: { color: c.onBrandPrimary, fontFamily: fonts.displayBold, fontSize: 24 },
-  brand: { color: "#FFFFFF", fontFamily: fonts.displayBold, fontSize: 26 },
+  brand: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 26 },
   hero: { gap: spacing.md, marginTop: "auto", marginBottom: spacing["3xl"] },
-  headline: { color: "#FFFFFF", fontFamily: fonts.displayBold, fontSize: 40, lineHeight: 46 },
-  sub: { color: "rgba(255,255,255,0.82)", fontFamily: fonts.text, fontSize: 16, lineHeight: 23 },
+  headline: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 40, lineHeight: 46 },
+  sub: { color: c.onSurfaceSecondary, fontFamily: fonts.text, fontSize: 16, lineHeight: 23 },
   actions: { gap: spacing.md, marginBottom: spacing.md },
   loginBtn: { alignItems: "center", paddingVertical: spacing.md },
-  loginText: { color: "#FFFFFF", fontFamily: fonts.semibold, fontSize: 15 },
+  loginText: { color: c.brand, fontFamily: fonts.semibold, fontSize: 15 },
 }));
