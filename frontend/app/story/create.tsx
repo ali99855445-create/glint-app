@@ -58,8 +58,8 @@ export default function CreateStory() {
         setAudio(url);
         setAudioDur(dur);
         toast.show("Voice recorded ✓", "success");
-      } catch {
-        toast.show("Recording failed", "error");
+      } catch (e: any) {
+        toast.show(e.message || "Voice upload failed", "error");
       } finally {
         setBusy(false);
       }
@@ -72,6 +72,8 @@ export default function CreateStory() {
       const r = await pickAndUploadImage({ quality: 0.6, aspect: [9, 16] });
       if (r?.denied) toast.show("Photo permission needed", "error");
       else if (r?.url) { setImage(r.url); setMode("photo"); }
+    } catch (e: any) {
+      toast.show(e.message || "Upload failed", "error");
     } finally {
       setBusy(false);
     }
