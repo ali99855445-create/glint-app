@@ -46,7 +46,7 @@ export default function AdminDashboard() {
     mutationFn: () => adminForm(`/admin/tickets/${replyModal!.id}/resolve`, { reply: replyText }),
     onSuccess: () => { toast.show("Ticket resolved", "success"); setReplyModal(null); setReplyText(""); qc.invalidateQueries({ queryKey: ["admin-tickets"] }); stats.refetch(); },
   });
-  const approveV = useMutation({ mutationFn: (id: string) => api.post(`/admin/verifications/${id}/approve`, {}, true), onSuccess: () => { toast.show("Approved — Golden Tick granted", "success"); verifications.refetch(); stats.refetch(); } });
+  const approveV = useMutation({ mutationFn: (id: string) => api.post(`/admin/verifications/${id}/approve`, {}, true), onSuccess: () => { toast.show("Approved — Blue Tick granted", "success"); verifications.refetch(); stats.refetch(); } });
   const rejectV = useMutation({ mutationFn: (id: string) => api.post(`/admin/verifications/${id}/reject`, {}, true), onSuccess: () => { toast.show("Rejected", "info"); verifications.refetch(); } });
   const delContent = useMutation({ mutationFn: (id: string) => api.post(`/admin/reports/${id}/delete-content`, {}, true), onSuccess: () => { toast.show("Content removed", "success"); reports.refetch(); stats.refetch(); } });
   const dismissReport = useMutation({ mutationFn: (id: string) => api.post(`/admin/reports/${id}/dismiss`, {}, true), onSuccess: () => { reports.refetch(); stats.refetch(); } });
