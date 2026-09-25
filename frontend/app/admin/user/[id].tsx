@@ -136,7 +136,7 @@ export default function AdminUserDetail() {
           <Info label="Phone" value={u.phone || "Not added"} />
           <Info label="Joined" value={u.created_at ? new Date(u.created_at).toLocaleString() : "Unknown"} />
           <Info label="Last seen" value={u.last_seen ? new Date(u.last_seen).toLocaleString() : "Unknown"} />
-          <Info label="Privacy" value={u.privacy || "public"} />
+          <Info label="Bio" value={u.bio || "Not added"} />\n          <Info label="Location" value={u.location || "Not added"} />\n          <Info label="Privacy" value={u.privacy || "public"} />
           <Info label="Sparks" value={String(u.sparks ?? 0)} />
           {!!u.suspended_until && <Info label="Suspended until" value={new Date(u.suspended_until).toLocaleString()} />}
           {!!u.suspend_reason && <Info label="Suspension reason" value={u.suspend_reason} />}
@@ -149,7 +149,7 @@ export default function AdminUserDetail() {
           <MiniStat label="Stories" value={data.counts?.stories} />
           <MiniStat label="Friends" value={data.counts?.friends} />
           <MiniStat label="Tickets" value={data.counts?.tickets} />
-          <MiniStat label="Reports" value={data.counts?.reports_made} />
+          <MiniStat label="Reports made" value={data.counts?.reports_made} />\n          <MiniStat label="Reports received" value={data.counts?.reports_received} />
         </View>
 
         <View style={styles.section}>
@@ -261,7 +261,7 @@ export default function AdminUserDetail() {
                 value={days}
                 onChangeText={setDays}
                 keyboardType="number-pad"
-                placeholder="Suspension days (0 = indefinite)"
+                placeholder="Suspension days (30 ≈ 1 month, 0 = indefinite)"
                 placeholderTextColor={colors.muted}
                 style={styles.input}
                 testID="admin-suspension-days"
