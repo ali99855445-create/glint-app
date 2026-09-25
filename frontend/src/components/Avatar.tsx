@@ -33,7 +33,6 @@ export function Avatar({ uri, name, size = 44, ring }: { uri?: string | null; na
 }
 
 export function BlueTick({ size = 15 }: { size?: number }) {
-  const { colors } = useTheme();
   const glow = useSharedValue(0);
   useEffect(() => {
     glow.value = withRepeat(withSequence(withTiming(1, { duration: 1100, easing: Easing.inOut(Easing.ease) }), withTiming(0, { duration: 1100, easing: Easing.inOut(Easing.ease) })), -1, false);
