@@ -109,7 +109,7 @@ export default function StoryViewer() {
   return (
     <View style={styles.root} testID="story-viewer">
       {isVoice ? (
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: current.bg_color || "#EAB308", alignItems: "center", justifyContent: "center", padding: spacing.xl, gap: spacing.xl }]}>
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: current.bg_color || "#67C587", alignItems: "center", justifyContent: "center", padding: spacing.xl, gap: spacing.xl }]}>
           <View style={styles.voiceOrb}>
             <Icon name="musical-notes" size={54} color="#FFFFFF" />
           </View>
@@ -122,7 +122,7 @@ export default function StoryViewer() {
           <Text style={styles.voiceHint}>🎙️ Voice drop</Text>
         </View>
       ) : isText ? (
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: current.bg_color || "#EAB308", alignItems: "center", justifyContent: "center", padding: spacing.xl }]}>
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: current.bg_color || "#67C587", alignItems: "center", justifyContent: "center", padding: spacing.xl }]}>
           <Text style={styles.storyText}>{current.text}</Text>
         </View>
       ) : (
@@ -224,7 +224,7 @@ export default function StoryViewer() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
   empty: { color: "#fff", fontFamily: fonts.medium, fontSize: 16 },
-  emptyLink: { color: "#EAB308", fontFamily: fonts.semibold, fontSize: 16 },
+  emptyLink: { color: "#67C587", fontFamily: fonts.semibold, fontSize: 16 },
   storyText: { color: "#FFFFFF", fontFamily: fonts.displayBold, fontSize: 30, textAlign: "center", lineHeight: 40 },
   voiceOrb: { width: 130, height: 130, borderRadius: 65, backgroundColor: "rgba(255,255,255,0.25)", borderWidth: 3, borderColor: "#FFFFFF", alignItems: "center", justifyContent: "center" },
   waveRow: { flexDirection: "row", alignItems: "center", gap: 4, height: 40 },
