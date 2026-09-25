@@ -579,7 +579,7 @@ async def get_me(me=Depends(get_current_user)):
     data.update({
         "email": me.get("email"),
         "phone": me.get("phone"),
-        "phone_verified": bool(me.get("phone_verified")) or bool(me.get("phone") and me.get("verified")),
+        "phone_verified": bool(me.get("phone_verified")) or bool(me.get("phone") and not me.get("email") and me.get("verified")),
         "sparks": me.get("sparks", 0),
         "inner_circle_count": len(me.get("inner_circle", [])),
         "counts": {"saved": saved, "friends": friends, "posts": posts},
@@ -1526,7 +1526,7 @@ def verification_eligibility(user: dict) -> dict:
         except Exception:
             age_days = 0
 
-    phone_verified = bool(user.get("phone_verified")) or bool(user.get("phone") and user.get("verified"))
+    phone_verified = bool(user.get("phone_verified")) or bool(user.get("phone") and not user.get("email") and user.get("verified"))
     return {
         "account_age_days": age_days,
         "account_old_enough": age_days >= 60,
