@@ -25,7 +25,7 @@ export const LEGAL_DOCS: Record<string, LegalDoc> = {
       },
       {
         heading: "5. Blue Tick Verification",
-        body: "The Blue Tick is a badge of authenticity granted at our discretion after review of submitted documents. It confirms identity — not endorsement. Misuse of verification documents, or attempting to buy, sell, or transfer a Blue Tick, results in immediate badge removal and possible suspension.",
+        body: "The Blue Tick is a badge of authenticity granted at our discretion. To apply, an account must be at least 2 months old, have a verified phone number, submit an accepted identity document, and complete a live selfie check. Approval confirms identity — not endorsement. Misuse of documents or selfies, or attempting to buy, sell, or transfer a Blue Tick, results in badge removal and possible suspension.",
       },
       {
         heading: "6. Sparks & Virtual Items",
