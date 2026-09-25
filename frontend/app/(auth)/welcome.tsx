@@ -13,7 +13,7 @@ export default function Welcome() {
   return (
     <View style={styles.root}>
       <LinearGradient
-        colors={["#171511", "#0B0B0A", "#000000"]}
+        colors={["#F7FCF9", "#EEF8F1", "#FFFFFF"]}
         style={StyleSheet.absoluteFill}
       />
       <View style={[styles.content, { paddingTop: insets.top + spacing.xl, paddingBottom: insets.bottom + spacing.xl }]}>
@@ -41,7 +41,7 @@ export default function Welcome() {
 }
 
 const useStyles = makeStyles((c) => ({
-  root: { flex: 1, backgroundColor: "#000000" },
+  root: { flex: 1, backgroundColor: "#FFFFFF" },
   content: { flex: 1, paddingHorizontal: spacing.xl, justifyContent: "space-between", paddingVertical: spacing.xl },
   brandTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   logoBadge: { width: 40, height: 40, borderRadius: radius.md, backgroundColor: c.brandPrimary, alignItems: "center", justifyContent: "center" },
