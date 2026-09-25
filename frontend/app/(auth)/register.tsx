@@ -64,7 +64,8 @@ export default function Register() {
       });
       setUserId(res.user_id);
       setOtpSent(true);
-      toast.show(`Verification code: ${res.dev_otp}`, "info");
+      if (res.dev_otp) toast.show(`Verification code: ${res.dev_otp}`, "info");
+      else toast.show(method === "phone" ? "SMS verification code sent" : "Verification code sent", "success");
     } catch (e: any) {
       toast.show(e.message, "error");
     } finally {
@@ -208,9 +209,10 @@ export default function Register() {
                 </Pressable>
               ))}
             </View>
-            <Field value={contact} onChangeText={setContact} placeholder={method === "email" ? "you@example.com" : "+1 555 000 0000"}
+            <Field value={contact} onChangeText={setContact} placeholder={method === "email" ? "you@example.com" : "+966 5X XXX XXXX"}
               autoCapitalize="none" keyboardType={method === "email" ? "email-address" : "phone-pad"} testID="register-contact"
               icon={<Icon name={method === "email" ? "mail-outline" : "call-outline"} size={20} color={colors.muted} />} />
+            {method === "phone" && <Text style={styles.phoneHint}>Use your full international number with country code, e.g. +966…</Text>}
             <Field value={password} onChangeText={setPassword} placeholder="Strong password (6+ chars)" secureTextEntry testID="register-password"
               icon={<Icon name="lock-closed-outline" size={20} color={colors.muted} />} />
 
@@ -297,6 +299,7 @@ const useStyles = makeStyles((c) => ({
   segItem: { flex: 1, flexDirection: "row", gap: spacing.sm, alignItems: "center", justifyContent: "center", paddingVertical: spacing.md, borderRadius: radius.sm },
   segText: { fontFamily: fonts.semibold, fontSize: 15 },
   resend: { color: c.brand, fontFamily: fonts.semibold, fontSize: 14, textAlign: "center" },
+  phoneHint: { color: c.muted, fontFamily: fonts.text, fontSize: 12, marginTop: -spacing.xs },
   avatarPick: { alignSelf: "center", width: 140, height: 140, borderRadius: 70, backgroundColor: c.surfaceTertiary, borderWidth: 2, borderColor: c.border, borderStyle: "dashed", alignItems: "center", justifyContent: "center", overflow: "hidden" },
   avatarImg: { width: "100%", height: "100%" },
   coverPick: { width: "100%", aspectRatio: 16 / 9, borderRadius: radius.lg, backgroundColor: c.surfaceTertiary, borderWidth: 2, borderColor: c.border, borderStyle: "dashed", alignItems: "center", justifyContent: "center", overflow: "hidden" },
