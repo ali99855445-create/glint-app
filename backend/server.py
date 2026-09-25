@@ -28,9 +28,9 @@ mongo_url = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
 client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)
 db = client[os.environ.get("DB_NAME", "glint")]
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "development-only-change-me")
+JWT_SECRET = os.environ.get("JWT_SECRET") or uuid.uuid4().hex
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@glinttest.com")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "disabled-until-configured")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 ADMIN_CREDS = [
     (ADMIN_EMAIL, ADMIN_PASSWORD),
     (os.environ.get('ADMIN_EMAIL_2', ''), os.environ.get('ADMIN_PASSWORD_2', '')),
