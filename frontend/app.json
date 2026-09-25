@@ -1,15 +1,15 @@
 {
   "expo": {
-    "name": "Glint App",
+    "name": "Glint",
     "slug": "glint-app",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "glint",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.interactiveglint.gfrvit",
+      "bundleIdentifier": "com.glinttechnologies.glint",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Upload photos to posts, stories and your profile",
         "NSCameraUsageDescription": "Take photos to share on Glint",
@@ -21,10 +21,14 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "com.emergent.interactiveglint.gfrvit",
+      "package": "com.glinttechnologies.glint",
       "permissions": [
-        "RECORD_AUDIO"
-      ]
+        "RECORD_AUDIO",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_AUDIO",
+        "READ_EXTERNAL_STORAGE"
+      ],
+      "versionCode": 2
     },
     "web": {
       "bundler": "metro",
@@ -36,6 +40,9 @@
       [
         "expo-splash-screen",
         {
+          "image": "./assets/images/splash-image.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
           "backgroundColor": "#000000"
         }
       ],
@@ -49,6 +56,9 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "productionApiUrl": "https://glint-api-xf2i.onrender.com"
     }
   }
 }

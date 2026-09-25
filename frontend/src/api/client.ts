@@ -1,7 +1,12 @@
 import { Platform } from "react-native";
+import Constants from "expo-constants";
 import { storage } from "@/src/utils/storage";
 
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
+// In production builds, the app talks to YOUR own backend (Render),
+// configured in app.json -> expo.extra.productionApiUrl.
+// In development/preview (__DEV__), it keeps using the Emergent preview backend.
+const PROD_BASE = ((Constants.expoConfig?.extra as any)?.productionApiUrl as string) || "";
+const BASE = !__DEV__ && PROD_BASE ? PROD_BASE : process.env.EXPO_PUBLIC_BACKEND_URL;
 export const API = `${BASE}/api`;
 
 export const TOKEN_KEY = "glint_token";
@@ -75,23 +80,44 @@ export async function adminForm(path: string, form: Record<string, string>): Pro
 }
 
 // Upload a local file (image/audio) and return the servable URL with token.
+// Native release builds use FileSystem.uploadAsync (native OkHttp/NSURLSession stack)
+// because fetch+FormData file uploads can silently fail in production APKs.
 export async function uploadFile(uri: string, name = "upload.jpg", type = "image/jpeg"): Promise<string> {
   const token = await getToken();
-  const form = new FormData();
+  const url = `${API}/upload`;
+
   if (Platform.OS === "web") {
+    const form = new FormData();
     const blob = await (await fetch(uri)).blob();
     form.append("file", blob, name);
-  } else {
-    form.append("file", { uri, name, type } as any);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: form,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.detail || `Upload failed (HTTP ${res.status})`);
+    return `${API}/files/${data.path}?token=${data.token}`;
   }
-  const res = await fetch(`${API}/upload`, {
-    method: "POST",
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: form,
+
+  const FileSystem = await import("expo-file-system/legacy");
+  const result = await FileSystem.uploadAsync(url, uri, {
+    httpMethod: "POST",
+    uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+    fieldName: "file",
+    mimeType: type,
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
-  if (!res.ok) throw new Error("Upload failed");
-  const data = await res.json();
-  // absolute url with token for both web <img> and native headers
+  let data: any = null;
+  try {
+    data = result.body ? JSON.parse(result.body) : null;
+  } catch {
+    data = null;
+  }
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error(data?.detail || `Upload failed (HTTP ${result.status}). Check your connection and try again.`);
+  }
+  if (!data?.path || !data?.token) throw new Error("Upload failed: bad server response");
   return `${API}/files/${data.path}?token=${data.token}`;
 }
 

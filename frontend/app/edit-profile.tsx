@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { View, Text, Pressable, ActivityIndicator } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { Image } from "expo-image";
@@ -31,15 +31,36 @@ export default function EditProfile() {
   const [cover, setCover] = useState(user?.cover || null);
   const [saving, setSaving] = useState(false);
 
+  // AuthContext user can load AFTER this screen mounts (cold open / refresh).
+  // Sync the form once the user object arrives so fields are never blank
+  // and Save never wipes existing profile data.
+  useEffect(() => {
+    if (user) {
+      setFullName(user.full_name || "");
+      setBio(user.bio || "");
+      setLocation(user.location || "");
+      setAvatar(user.avatar || null);
+      setCover(user.cover || null);
+    }
+  }, [user?.id]);
+
   async function changeAvatar() {
-    const r = await pickAndUploadImage({ aspect: [1, 1] });
-    if (r?.denied) return toast.show("Photo permission needed", "error");
-    if (r?.url) setAvatar(r.url);
+    try {
+      const r = await pickAndUploadImage({ aspect: [1, 1] });
+      if (r?.denied) return toast.show("Photo permission needed", "error");
+      if (r?.url) setAvatar(r.url);
+    } catch (e: any) {
+      toast.show(e.message || "Upload failed", "error");
+    }
   }
   async function changeCover() {
-    const r = await pickAndUploadImage({ aspect: [16, 9] });
-    if (r?.denied) return toast.show("Photo permission needed", "error");
-    if (r?.url) setCover(r.url);
+    try {
+      const r = await pickAndUploadImage({ aspect: [16, 9] });
+      if (r?.denied) return toast.show("Photo permission needed", "error");
+      if (r?.url) setCover(r.url);
+    } catch (e: any) {
+      toast.show(e.message || "Upload failed", "error");
+    }
   }
 
   async function save() {

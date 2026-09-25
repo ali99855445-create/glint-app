@@ -32,9 +32,13 @@ export default function Verification() {
   const current = status.data?.status;
 
   async function uploadDoc() {
-    const r = await pickAndUploadImage({ quality: 0.7 });
-    if (r?.denied) return toast.show("Photo permission needed", "error");
-    if (r?.url) setDoc(r.url);
+    try {
+      const r = await pickAndUploadImage({ quality: 0.7 });
+      if (r?.denied) return toast.show("Photo permission needed", "error");
+      if (r?.url) setDoc(r.url);
+    } catch (e: any) {
+      toast.show(e.message || "Upload failed", "error");
+    }
   }
 
   async function submit() {
