@@ -56,7 +56,7 @@ jobs:
               android:viewportWidth="96"
               android:viewportHeight="96">
               <path
-                  android:fillColor="#EAB308"
+                  android:fillColor="#8BD5A4"
                   android:pathData="M48,8A40,40 0,1 0,48 88A40,40 0,1 0,48 8Z"/>
           </vector>
           """)
