@@ -583,7 +583,8 @@ async def get_me(me=Depends(get_current_user)):
 
 @api.put("/users/me")
 async def update_me(body: ProfileUpdate, me=Depends(get_current_user)):
-    # Fields explicitly sent as null should be cleared; omitted fields stay unchanged.\n    update = {k: v for k, v in body.dict(exclude_unset=True).items()}
+    # Fields explicitly sent as null should be cleared; omitted fields stay unchanged.
+    update = {k: v for k, v in body.dict(exclude_unset=True).items()}
     if update:
         await db.users.update_one({"id": me["id"]}, {"$set": update})
     fresh = await db.users.find_one({"id": me["id"]}, {"_id": 0})
