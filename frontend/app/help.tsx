@@ -29,9 +29,13 @@ export default function Help() {
   const [submitting, setSubmitting] = useState(false);
 
   async function attach() {
-    const r = await pickAndUploadImage({ quality: 0.6 });
-    if (r?.denied) return toast.show("Photo permission needed", "error");
-    if (r?.url) setScreenshot(r.url);
+    try {
+      const r = await pickAndUploadImage({ quality: 0.6 });
+      if (r?.denied) return toast.show("Photo permission needed", "error");
+      if (r?.url) setScreenshot(r.url);
+    } catch (e: any) {
+      toast.show(e.message || "Upload failed", "error");
+    }
   }
 
   async function submit() {
