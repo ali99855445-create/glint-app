@@ -24,13 +24,13 @@ import storage_helper
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+mongo_url = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)
+db = client[os.environ.get("DB_NAME", "glint")]
 
-JWT_SECRET = os.environ['JWT_SECRET']
-ADMIN_EMAIL = os.environ['ADMIN_EMAIL']
-ADMIN_PASSWORD = os.environ['ADMIN_PASSWORD']
+JWT_SECRET = os.environ.get("JWT_SECRET", "development-only-change-me")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@glinttest.com")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "disabled-until-configured")
 ADMIN_CREDS = [
     (ADMIN_EMAIL, ADMIN_PASSWORD),
     (os.environ.get('ADMIN_EMAIL_2', ''), os.environ.get('ADMIN_PASSWORD_2', '')),
@@ -1716,8 +1716,12 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    await db.users.create_index("username")
-    await db.users.create_index("email")
+    try:
+        await db.users.create_index("username")
+        await db.users.create_index("email")
+        logger.info("MongoDB connection ready")
+    except Exception as e:
+        logger.error(f"MongoDB startup check failed: {e}")
 
 
 @app.on_event("shutdown")
