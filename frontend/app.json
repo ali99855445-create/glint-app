@@ -52,7 +52,7 @@
       "typedRoutes": true
     },
     "extra": {
-      "productionApiUrl": ""
+      "productionApiUrl": "https://glint-api-xf2i.onrender.com"
     }
   }
 }
