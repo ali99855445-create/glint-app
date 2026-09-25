@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { makeStyles, useTheme, fonts, spacing, radius } from "@/src/theme";
 import { api, fileUrl } from "@/src/api/client";
-import { Avatar, GoldenTick } from "@/src/components/Avatar";
+import { Avatar, BlueTick } from "@/src/components/Avatar";
 import { Icon } from "@/src/components/Icon";
 import { PostCard } from "@/src/components/PostCard";
 import { useAuth } from "@/src/context/AuthContext";
@@ -64,7 +64,7 @@ export default function ProfileTab() {
 
         <View style={styles.nameRow}>
           <Text style={styles.name}>{data?.full_name}</Text>
-          {data?.verified && <GoldenTick size={20} />}
+          {data?.verified && <BlueTick size={20} />}
         </View>
         <Text style={styles.username}>glint.app/{data?.username}</Text>
         {!!data?.bio && <Text style={styles.bio}>{data.bio}</Text>}
@@ -94,8 +94,8 @@ export default function ProfileTab() {
 
         {!data?.verified && (
           <Pressable style={styles.verifyPrompt} onPress={() => router.push("/verification")} testID="profile-get-verified">
-            <GoldenTick size={18} />
-            <Text style={styles.verifyText}>Get the Golden Tick — request verification</Text>
+            <BlueTick size={18} />
+            <Text style={styles.verifyText}>Get the Blue Tick — request verification</Text>
             <Icon name="chevron-forward" size={18} color={colors.brand} />
           </Pressable>
         )}
