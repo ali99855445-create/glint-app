@@ -4,6 +4,9 @@ import random
 import logging
 import smtplib
 import ssl
+import json
+import urllib.request
+import urllib.error
 from email.message import EmailMessage
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -43,6 +46,8 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM_EMAIL = os.environ.get("SMTP_FROM_EMAIL", SMTP_USERNAME).strip()
 SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "Glint").strip() or "Glint"
 SMTP_SECURITY = os.environ.get("SMTP_SECURITY", "ssl").strip().lower()
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
+RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", SMTP_FROM_EMAIL or "noreply@glinttest.com").strip()
 DEV_OTP_ENABLED = os.environ.get("DEV_OTP_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 app = FastAPI()
@@ -76,7 +81,7 @@ def verify_pw(pw: str, hashed: str) -> bool:
         return False
 
 
-def _send_email_sync(to_email: str, subject: str, body: str) -> None:
+def _send_smtp_email_sync(to_email: str, subject: str, body: str) -> None:
     if not (SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM_EMAIL):
         raise RuntimeError("SMTP is not configured")
 
@@ -100,9 +105,35 @@ def _send_email_sync(to_email: str, subject: str, body: str) -> None:
             server.send_message(msg)
 
 
+def _send_resend_email_sync(to_email: str, subject: str, body: str) -> None:
+    if not (RESEND_API_KEY and RESEND_FROM_EMAIL):
+        raise RuntimeError("Resend is not configured")
+
+    payload = json.dumps({
+        "from": f"{SMTP_FROM_NAME} <{RESEND_FROM_EMAIL}>",
+        "to": [to_email],
+        "subject": subject,
+        "text": body,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+            "User-Agent": "Glint/1.0",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=20) as response:
+        if response.status < 200 or response.status >= 300:
+            raise RuntimeError(f"Resend returned HTTP {response.status}")
+
+
 async def send_otp_email(to_email: str, code: str, purpose: str) -> bool:
-    if not (SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM_EMAIL):
-        logger.warning("SMTP is not configured; email OTP was not sent")
+    if not RESEND_API_KEY and not (SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM_EMAIL):
+        logger.warning("No email provider is configured; email OTP was not sent")
         return False
 
     if purpose == "reset":
@@ -118,7 +149,10 @@ async def send_otp_email(to_email: str, code: str, purpose: str) -> bool:
         "This code is for your Glint account. If you did not request it, you can ignore this email."
     )
     try:
-        await run_in_threadpool(_send_email_sync, to_email, subject, body)
+        if RESEND_API_KEY:
+            await run_in_threadpool(_send_resend_email_sync, to_email, subject, body)
+        else:
+            await run_in_threadpool(_send_smtp_email_sync, to_email, subject, body)
         return True
     except Exception:
         logger.exception("Failed to send OTP email")
@@ -355,36 +389,27 @@ class ForceUpdateBody(BaseModel):
     min_version: Optional[str] = None
 
 
-def _smtp_check_sync() -> bool:
-    if not (SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD):
-        return False
-    context = ssl.create_default_context()
-    if SMTP_SECURITY == "ssl":
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-    else:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
-            server.ehlo()
-            server.starttls(context=context)
-            server.ehlo()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-    return True
+def _email_provider_configured() -> bool:
+    if RESEND_API_KEY and RESEND_FROM_EMAIL:
+        return True
+    return bool(SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM_EMAIL)
 
 
 @app.get("/health")
 async def health():
     mongo_ok = False
-    smtp_ok = False
     try:
         await client.admin.command("ping")
         mongo_ok = True
     except Exception:
         mongo_ok = False
-    try:
-        smtp_ok = await run_in_threadpool(_smtp_check_sync)
-    except Exception:
-        smtp_ok = False
-    return {"status": "ok" if mongo_ok and smtp_ok else "degraded", "mongodb": mongo_ok, "smtp": smtp_ok}
+    email_ok = _email_provider_configured()
+    return {
+        "status": "ok" if mongo_ok and email_ok else "degraded",
+        "mongodb": mongo_ok,
+        "email_configured": email_ok,
+        "email_provider": "resend" if RESEND_API_KEY else ("smtp" if email_ok else "none"),
+    }
 
 
 
