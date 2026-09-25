@@ -24,12 +24,12 @@ function ThemedStatusBar() {
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
-    "Outfit-Regular": "https://cdn.jsdelivr.net/fontsource/fonts/outfit@latest/latin-400-normal.ttf",
-    "Outfit-SemiBold": "https://cdn.jsdelivr.net/fontsource/fonts/outfit@latest/latin-600-normal.ttf",
-    "Outfit-Bold": "https://cdn.jsdelivr.net/fontsource/fonts/outfit@latest/latin-700-normal.ttf",
-    "Figtree-Regular": "https://cdn.jsdelivr.net/fontsource/fonts/figtree@latest/latin-400-normal.ttf",
-    "Figtree-Medium": "https://cdn.jsdelivr.net/fontsource/fonts/figtree@latest/latin-500-normal.ttf",
-    "Figtree-SemiBold": "https://cdn.jsdelivr.net/fontsource/fonts/figtree@latest/latin-600-normal.ttf",
+    "Outfit-Regular": require("../assets/fonts/SpaceMono-Regular.ttf"),
+    "Outfit-SemiBold": require("../assets/fonts/SpaceMono-Regular.ttf"),
+    "Outfit-Bold": require("../assets/fonts/SpaceMono-Regular.ttf"),
+    "Figtree-Regular": require("../assets/fonts/SpaceMono-Regular.ttf"),
+    "Figtree-Medium": require("../assets/fonts/SpaceMono-Regular.ttf"),
+    "Figtree-SemiBold": require("../assets/fonts/SpaceMono-Regular.ttf"),
   });
 
   if (!fontsLoaded && !fontError) {
