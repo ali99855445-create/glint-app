@@ -2346,6 +2346,7 @@ def admin_safe_user(u: dict) -> dict:
         "phone": u.get("phone"),
         "phone_verified": bool(u.get("phone_verified")) or bool(u.get("phone") and not u.get("email") and u.get("verified")),
         "account_contact_verified": bool(u.get("verified")),
+        "contact_visibility": u.get("contact_visibility", "only_me"),
         "blue_tick": bool(u.get("golden_tick")),
         "sparks": u.get("sparks", 0),
         "last_seen": u.get("last_seen"),
