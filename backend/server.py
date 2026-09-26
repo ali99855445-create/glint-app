@@ -933,6 +933,8 @@ async def get_me(me=Depends(get_current_user)):
     saved = await db.saved.count_documents({"user_id": me["id"]})
     friends = await db.friendships.count_documents({"users": me["id"]})
     posts = await db.posts.count_documents({"author_id": me["id"], "deleted_at": None})
+    followers = await db.follows.count_documents({"following_id": me["id"]})
+    following = await db.follows.count_documents({"follower_id": me["id"]})
     data = public_user(me)
     data.update({
         "email": me.get("email"),
@@ -955,7 +957,13 @@ async def get_me(me=Depends(get_current_user)):
         ),
         "sparks": me.get("sparks", 0),
         "inner_circle_count": len(me.get("inner_circle", [])),
-        "counts": {"saved": saved, "friends": friends, "posts": posts},
+        "counts": {
+            "saved": saved,
+            "friends": friends,
+            "posts": posts,
+            "followers": followers,
+            "following": following,
+        },
     })
     return data
 
@@ -1021,6 +1029,9 @@ async def get_user(username: str, me=Depends(get_current_user)):
     data["is_me"] = u["id"] == me["id"]
     data["is_blocked"] = u["id"] in set(me.get("blocked", []))
     data["is_inner"] = u["id"] in me.get("inner_circle", [])
+    data["is_following"] = await db.follows.find_one({
+        "follower_id": me["id"], "following_id": u["id"]
+    }) is not None
     profile_privacy = u.get("privacy", "public")
     can_view = data["is_me"] or profile_privacy == "public" or (profile_privacy == "friends" and friend)
     data["can_view"] = can_view
@@ -1033,6 +1044,8 @@ async def get_user(username: str, me=Depends(get_current_user)):
     data["counts"] = {
         "friends": await db.friendships.count_documents({"users": u["id"]}),
         "posts": await db.posts.count_documents({"author_id": u["id"], "deleted_at": None}),
+        "followers": await db.follows.count_documents({"following_id": u["id"]}),
+        "following": await db.follows.count_documents({"follower_id": u["id"]}),
     }
     if can_view:
         posts = await feed_posts_for_author(u["id"], me["id"])
@@ -1042,12 +1055,82 @@ async def get_user(username: str, me=Depends(get_current_user)):
     return data
 
 
+@api.post("/users/{user_id}/follow")
+async def follow_user(user_id: str, me=Depends(get_current_user)):
+    if user_id == me["id"]:
+        raise HTTPException(400, "You cannot follow yourself")
+    target = await db.users.find_one({"id": user_id, "deleted_at": None, "verified": True})
+    if not target:
+        raise HTTPException(404, "User not found")
+    if user_id in set(me.get("blocked", [])):
+        raise HTTPException(400, "Unblock this user before following")
+    blocked_by_target = await db.users.find_one({"id": user_id, "blocked": me["id"]})
+    if blocked_by_target:
+        raise HTTPException(403, "You cannot follow this account")
+    existing = await db.follows.find_one({"follower_id": me["id"], "following_id": user_id})
+    if existing:
+        return {"ok": True, "following": True}
+    await db.follows.insert_one({
+        "id": new_id(),
+        "follower_id": me["id"],
+        "following_id": user_id,
+        "created_at": now_iso(),
+    })
+    await notify(user_id, me["id"], "follow", me["id"], f"{me['full_name']} followed you")
+    return {"ok": True, "following": True}
+
+
+@api.delete("/users/{user_id}/follow")
+async def unfollow_user(user_id: str, me=Depends(get_current_user)):
+    await db.follows.delete_many({"follower_id": me["id"], "following_id": user_id})
+    return {"ok": True, "following": False}
+
+
+@api.get("/users/{user_id}/followers")
+async def user_followers(user_id: str, me=Depends(get_current_user)):
+    target = await db.users.find_one({"id": user_id, "deleted_at": None})
+    if not target:
+        raise HTTPException(404, "User not found")
+    out = []
+    cur = db.follows.find({"following_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(500)
+    async for row in cur:
+        u = await db.users.find_one({"id": row.get("follower_id"), "deleted_at": None, "verified": True}, {"_id": 0})
+        if not u:
+            continue
+        item = public_user(u)
+        item["is_following"] = await db.follows.find_one({
+            "follower_id": me["id"], "following_id": u["id"]
+        }) is not None
+        out.append(item)
+    return out
+
+
+@api.get("/users/{user_id}/following")
+async def user_following(user_id: str, me=Depends(get_current_user)):
+    target = await db.users.find_one({"id": user_id, "deleted_at": None})
+    if not target:
+        raise HTTPException(404, "User not found")
+    out = []
+    cur = db.follows.find({"follower_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(500)
+    async for row in cur:
+        u = await db.users.find_one({"id": row.get("following_id"), "deleted_at": None, "verified": True}, {"_id": 0})
+        if not u:
+            continue
+        item = public_user(u)
+        item["is_following"] = await db.follows.find_one({
+            "follower_id": me["id"], "following_id": u["id"]
+        }) is not None
+        out.append(item)
+    return out
+
+
 @api.delete("/users/me")
 async def delete_account(me=Depends(get_current_user)):
     ts = now_iso()
     await db.users.update_one({"id": me["id"]}, {"$set": {"deleted_at": ts, "verified": False}})
     await db.posts.update_many({"author_id": me["id"]}, {"$set": {"deleted_at": ts}})
     await db.stories.update_many({"author_id": me["id"]}, {"$set": {"deleted_at": ts}})
+    await db.follows.delete_many({"$or": [{"follower_id": me["id"]}, {"following_id": me["id"]}]})
     return {"ok": True}
 
 
@@ -1058,6 +1141,10 @@ async def block_user(user_id: str, me=Depends(get_current_user)):
     await db.friendships.delete_many({"users": {"$all": [me["id"], user_id]}})
     await db.friend_requests.delete_many({"$or": [
         {"from": me["id"], "to": user_id}, {"from": user_id, "to": me["id"]}]})
+    await db.follows.delete_many({"$or": [
+        {"follower_id": me["id"], "following_id": user_id},
+        {"follower_id": user_id, "following_id": me["id"]},
+    ]})
     return {"ok": True}
 
 
@@ -2365,6 +2452,8 @@ async def admin_user_full(user_id: str, _=Depends(require_admin)):
         }),
         "messages_sent": await db.messages.count_documents({"from_user": user_id}),
         "warnings": await db.warnings.count_documents({"user_id": user_id}),
+        "followers": await db.follows.count_documents({"following_id": user_id}),
+        "following": await db.follows.count_documents({"follower_id": user_id}),
     }
 
     return {
@@ -2461,6 +2550,7 @@ async def admin_permanent_remove_user(user_id: str, reason: str):
     await db.stories.update_many({"author_id": user_id, "deleted_at": None}, {"$set": {"deleted_at": ts, "moderation_reason": reason, "moderated_by": "admin"}})
     await db.friendships.delete_many({"users": user_id})
     await db.friend_requests.delete_many({"$or": [{"from": user_id}, {"to": user_id}]})
+    await db.follows.delete_many({"$or": [{"follower_id": user_id}, {"following_id": user_id}]})
     await db.users.update_many({}, {"$pull": {"inner_circle": user_id, "blocked": user_id}})
     await admin_audit("permanent_remove_user", "user", user_id, reason, user_id, {"username": u.get("username")})
     return {"ok": True}
