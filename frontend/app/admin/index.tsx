@@ -139,7 +139,8 @@ export default function AdminDashboard() {
     mutationFn: async () => {
       if (!contentAction) return;
       const action = contentAction.restore ? "restore" : "delete";
-      return api.post(`/admin/${contentAction.kind}s/${contentAction.id}/${action}`, { reason: contentReason.trim() }, true);
+      const plural = contentAction.kind === "story" ? "stories" : contentAction.kind === "comment" ? "comments" : "posts";
+      return api.post(`/admin/${plural}/${contentAction.id}/${action}`, { reason: contentReason.trim() }, true);
     },
     onSuccess: () => {
       toast.show(contentAction?.restore ? "Content restored" : "Content removed", "success");
