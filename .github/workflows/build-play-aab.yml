@@ -43,11 +43,26 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+
           manifest = Path("android/app/src/main/AndroidManifest.xml")
           s = manifest.read_text()
           if 'android:usesCleartextTraffic=' not in s:
               s = s.replace('<application ', '<application android:usesCleartextTraffic="true" ', 1)
           manifest.write_text(s)
+
+          drawable = Path("android/app/src/main/res/drawable")
+          drawable.mkdir(parents=True, exist_ok=True)
+          (drawable / "splashscreen_logo.xml").write_text("""<?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="96dp"
+              android:height="96dp"
+              android:viewportWidth="96"
+              android:viewportHeight="96">
+              <path
+                  android:fillColor="#4CAF70"
+                  android:pathData="M48,8A40,40 0,1 0,48 88A40,40 0,1 0,48 8Z"/>
+          </vector>
+          """)
           PY
 
       - name: Build Android App Bundle
