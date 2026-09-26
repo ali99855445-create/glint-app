@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form, Header, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
@@ -2380,6 +2380,69 @@ async def set_force_update(body: ForceUpdateBody, _=Depends(require_admin)):
 @api.get("/")
 async def root():
     return {"message": "Glint API"}
+
+
+@app.get("/privacy-policy", response_class=HTMLResponse)
+async def privacy_policy():
+    return HTMLResponse("""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Glint Privacy Policy</title>
+  <style>
+    body{font-family:Arial,sans-serif;background:#f7faf8;color:#142018;margin:0}
+    main{max-width:850px;margin:0 auto;padding:32px 20px 56px}
+    .card{background:#fff;border:1px solid #e4ece7;border-radius:18px;padding:28px;box-shadow:0 8px 30px rgba(0,0,0,.04)}
+    h1{margin:0 0 8px;color:#168a4a} h2{margin-top:28px;color:#163c28}
+    p,li{line-height:1.65} .muted{color:#68756c;font-size:14px}
+    a{color:#168a4a}
+  </style>
+</head>
+<body><main><div class="card">
+  <h1>Glint Privacy Policy</h1>
+  <p class="muted">Effective date: September 26, 2026</p>
+  <p>Glint is a social communication service operated by Glint Technologies. This Privacy Policy explains what information Glint may collect, why it is used, how it may be shared, and the choices available to users.</p>
+
+  <h2>1. Information we collect</h2>
+  <p>Depending on how you use Glint, we may collect:</p>
+  <ul>
+    <li>Account information such as name, username, email address or phone number, password credentials in protected form, and account status.</li>
+    <li>Profile information you choose to provide, such as profile photo, cover photo, bio, date of birth, and other profile details.</li>
+    <li>Content and activity such as photo posts, stories, comments, likes, saves, friend requests, friendships, messages, reports, and moderation interactions.</li>
+    <li>Verification information when you apply for verification, which may include a verified phone number, government-issued identification, and a live selfie.</li>
+    <li>Service and security records needed to operate, troubleshoot, protect, and prevent abuse of Glint.</li>
+  </ul>
+
+  <h2>2. How we use information</h2>
+  <ul>
+    <li>To create and secure accounts and provide login and one-time-code verification.</li>
+    <li>To provide profiles, posts, stories, messaging, friend features, notifications, and other Glint functionality.</li>
+    <li>To review verification requests, reports, impersonation claims, copyright complaints, and other safety issues.</li>
+    <li>To provide support, maintain the service, detect abuse, enforce Glint rules, and improve reliability.</li>
+  </ul>
+
+  <h2>3. Privacy controls</h2>
+  <p>Glint provides privacy controls for profile and contact information. Depending on the available setting, users can limit visibility to the public, friends, or only themselves. Email addresses and phone numbers are not displayed beyond the visibility selected by the user.</p>
+
+  <h2>4. How information may be shared</h2>
+  <p>Information may be shared with other Glint users when you choose to make it visible or interact with them. Glint also uses service providers for infrastructure, database hosting, email delivery, SMS verification, and related technical services. These providers process information only as needed to provide those services. Glint does not sell personal information.</p>
+
+  <h2>5. Account deletion and retention</h2>
+  <p>You can request account deletion from within Glint. Deletion disables the account and removes or hides associated profile content from the active service. Some limited records may be retained where necessary for security, fraud prevention, dispute resolution, legal obligations, or enforcement of Glint rules.</p>
+
+  <h2>6. Security</h2>
+  <p>Glint uses reasonable technical and organizational safeguards designed to protect user information. No online service can guarantee absolute security.</p>
+
+  <h2>7. Children</h2>
+  <p>Glint is not intended for children under 13. Where local law requires a higher minimum age, users must meet that requirement.</p>
+
+  <h2>8. Changes to this policy</h2>
+  <p>We may update this Privacy Policy as Glint changes. The effective date at the top of this page will be updated when material changes are made.</p>
+
+  <h2>9. Contact</h2>
+  <p>For privacy questions or requests, use the Help Center inside Glint. If you cannot access your account, use the support contact shown on Glint's Google Play listing.</p>
+</div></main></body></html>""")
 
 
 app.include_router(api)
