@@ -36,6 +36,14 @@ export default function UserProfile() {
   const cancelReq = useMutation({ mutationFn: () => api.post(`/friends/cancel/${data.id}`), onSuccess: refetch });
   const accept = useMutation({ mutationFn: () => api.post(`/friends/accept/${data.id}`), onSuccess: () => { toast.show("Friend added!", "success"); refetch(); } });
   const unfriend = useMutation({ mutationFn: () => api.del(`/friends/${data.id}`), onSuccess: () => { toast.show("Removed", "success"); refetch(); } });
+  const follow = useMutation({
+    mutationFn: () => api.post(`/users/${data.id}/follow`),
+    onSuccess: () => { toast.show("Following", "success"); refetch(); },
+  });
+  const unfollow = useMutation({
+    mutationFn: () => api.del(`/users/${data.id}/follow`),
+    onSuccess: () => { toast.show("Unfollowed", "success"); refetch(); },
+  });
   const block = useMutation({ mutationFn: () => api.post(`/users/${data.id}/block`), onSuccess: () => { toast.show("User blocked", "success"); setMenu(false); refetch(); } });
   const toggleInner = useMutation({
     mutationFn: () => (data.is_inner ? api.del(`/inner-circle/${data.id}`) : api.post(`/inner-circle/${data.id}`)),
@@ -102,6 +110,14 @@ export default function UserProfile() {
         <View style={styles.avatarRow}>
           <View style={styles.avatarBorder}><Avatar uri={data.avatar} name={data.full_name} size={92} /></View>
           <View style={styles.actionBtns}>
+            <Button
+              title={data.is_following ? "Following" : "Follow"}
+              small
+              variant={data.is_following ? "secondary" : "primary"}
+              onPress={() => data.is_following ? unfollow.mutate() : follow.mutate()}
+              loading={follow.isPending || unfollow.isPending}
+              testID="user-follow"
+            />
             {friendAction()}
             {data.friend_status === "friends" && (
               <Button title="Message" small variant="secondary" onPress={() => router.push(`/chat/${data.id}`)} testID="user-message" />
@@ -143,7 +159,27 @@ export default function UserProfile() {
         <View style={styles.stats}>
           <View style={styles.stat}><Text style={styles.statNum}>{data.counts?.posts ?? 0}</Text><Text style={styles.statLabel}>Posts</Text></View>
           <View style={styles.statDivider} />
-          <View style={styles.stat}><Text style={styles.statNum}>{data.counts?.friends ?? 0}</Text><Text style={styles.statLabel}>Friends</Text></View>
+          <Pressable
+            style={styles.stat}
+            onPress={() => router.push(`/follows?mode=followers&userId=${data.id}&username=${encodeURIComponent(data.username || "")}`)}
+            testID="user-followers"
+          >
+            <Text style={styles.statNum}>{data.counts?.followers ?? 0}</Text>
+            <Text style={styles.statLabel}>Followers</Text>
+          </Pressable>
+          <View style={styles.statDivider} />
+          <Pressable
+            style={styles.stat}
+            onPress={() => router.push(`/follows?mode=following&userId=${data.id}&username=${encodeURIComponent(data.username || "")}`)}
+            testID="user-following"
+          >
+            <Text style={styles.statNum}>{data.counts?.following ?? 0}</Text>
+            <Text style={styles.statLabel}>Following</Text>
+          </Pressable>
+        </View>
+        <View style={styles.friendCount}>
+          <Text style={styles.friendCountNum}>{data.counts?.friends ?? 0}</Text>
+          <Text style={styles.statLabel}>Friends</Text>
         </View>
 
         {!data.can_view && (
@@ -194,7 +230,7 @@ const useStyles = makeStyles((c) => ({
   infoWrap: { paddingHorizontal: spacing.lg, marginTop: -46 },
   avatarRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end" },
   avatarBorder: { padding: 4, borderRadius: 54, backgroundColor: c.surface },
-  actionBtns: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.sm },
+  actionBtns: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: spacing.xs, marginBottom: spacing.sm, maxWidth: "72%" },
   nameRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.md },
   name: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 24 },
   username: { color: c.brand, fontFamily: fonts.medium, fontSize: 14, marginTop: 2 },
@@ -206,10 +242,12 @@ const useStyles = makeStyles((c) => ({
   contactTitle: { color: c.onSurface, fontFamily: fonts.semibold, fontSize: 14 },
   contactRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   contactText: { color: c.onSurfaceSecondary, fontFamily: fonts.text, fontSize: 14 },
-  stats: { flexDirection: "row", alignItems: "center", gap: spacing.xl, marginTop: spacing.lg },
-  stat: {}, statNum: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 22 },
+  stats: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.lg },
+  stat: { flex: 1, alignItems: "center" }, statNum: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 22 },
   statLabel: { color: c.muted, fontFamily: fonts.text, fontSize: 13 },
   statDivider: { width: 1, height: 30, backgroundColor: c.border },
+  friendCount: { alignSelf: "flex-start", flexDirection: "row", alignItems: "baseline", gap: spacing.xs, marginTop: spacing.sm, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: radius.pill, backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.border },
+  friendCountNum: { color: c.onSurface, fontFamily: fonts.semibold, fontSize: 14 },
   private: { alignItems: "center", gap: spacing.xs, paddingVertical: spacing["2xl"], marginTop: spacing.lg },
   privateTitle: { color: c.onSurface, fontFamily: fonts.semibold, fontSize: 16 },
   privateSub: { color: c.muted, fontFamily: fonts.text, fontSize: 14 },
