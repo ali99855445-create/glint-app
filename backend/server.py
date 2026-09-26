@@ -36,9 +36,11 @@ db = client[os.environ.get("DB_NAME", "glint")]
 JWT_SECRET = os.environ.get("JWT_SECRET") or uuid.uuid4().hex
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@glinttest.com")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+ADMIN_EMAIL_2 = os.environ.get("ADMIN_EMAIL_2", "").strip()
+ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "").strip()
 ADMIN_CREDS = [
     (ADMIN_EMAIL, ADMIN_PASSWORD),
-    (os.environ.get('ADMIN_EMAIL_2', ''), os.environ.get('ADMIN_PASSWORD_2', '')),
+    (ADMIN_EMAIL_2, os.environ.get("ADMIN_PASSWORD_2", "")),
 ]
 
 SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
@@ -827,9 +829,19 @@ async def get_me(me=Depends(get_current_user)):
         "phone": me.get("phone"),
         "phone_verified": bool(me.get("phone_verified")) or bool(me.get("phone") and not me.get("email") and me.get("verified")),
         "contact_visibility": me.get("contact_visibility", "only_me"),
-        "is_admin": bool(me.get("email")) and any(
-            me.get("email", "").strip().lower() == admin_email.strip().lower()
-            for admin_email, _ in ADMIN_CREDS if admin_email
+        "is_admin": (
+            (
+                bool(me.get("email"))
+                and me.get("email", "").strip().lower() in {
+                    email.strip().lower() for email, _ in ADMIN_CREDS if email
+                }
+            )
+            or (
+                bool(me.get("phone"))
+                and bool(ADMIN_PHONE)
+                and "".join(ch for ch in str(me.get("phone")) if ch.isdigit())
+                    == "".join(ch for ch in ADMIN_PHONE if ch.isdigit())
+            )
         ),
         "sparks": me.get("sparks", 0),
         "inner_circle_count": len(me.get("inner_circle", [])),
