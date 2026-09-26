@@ -342,6 +342,7 @@ def make_token(user_id: str, is_admin: bool = False) -> str:
     payload = {
         "sub": user_id,
         "admin": is_admin,
+        "iat": int(datetime.now(timezone.utc).timestamp()),
         "exp": datetime.now(timezone.utc) + timedelta(days=30),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
@@ -349,6 +350,36 @@ def make_token(user_id: str, is_admin: bool = False) -> str:
 
 def decode_token(token: str) -> dict:
     return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+
+
+def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+async def app_feature_enabled(name: str, default: bool = True) -> bool:
+    cfg = await db.config.find_one({"id": "app"}, {"_id": 0, "feature_flags": 1}) or {}
+    flags = cfg.get("feature_flags") or {}
+    return bool(flags.get(name, default))
+
+
+async def ensure_not_restricted(user: dict, field: str, label: str):
+    until = parse_iso_datetime(user.get(field))
+    if not until:
+        return
+    if until <= datetime.now(timezone.utc):
+        await db.users.update_one({"id": user["id"]}, {"$set": {field: None}})
+        user[field] = None
+        return
+    reason = user.get("restriction_reason") or "Temporary account restriction"
+    raise HTTPException(403, f"{label} is temporarily restricted until {until.isoformat()}. Reason: {reason}")
 
 
 async def get_current_user(authorization: Optional[str] = Header(None)):
@@ -362,6 +393,11 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
     if not user:
         raise HTTPException(401, "User not found")
+    force_logout_at = parse_iso_datetime(user.get("force_logout_at"))
+    if force_logout_at:
+        token_iat = payload.get("iat")
+        if not token_iat or int(token_iat) <= int(force_logout_at.timestamp()):
+            raise HTTPException(401, "Session expired. Please sign in again.")
     if user.get("deleted_at"):
         reason = user.get("deleted_reason") or "This account has been removed by Glint."
         raise HTTPException(403, f"Account removed. Reason: {reason}")
@@ -369,6 +405,27 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
     if suspension:
         until_text = f" Until: {suspension['until']}." if suspension.get("until") else ""
         raise HTTPException(403, f"Account suspended. Reason: {suspension['reason']}.{until_text}")
+    return user
+
+
+async def get_authenticated_user_allow_suspended(authorization: Optional[str] = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Not authenticated")
+    token = authorization.split(" ", 1)[1]
+    try:
+        payload = decode_token(token)
+    except Exception:
+        raise HTTPException(401, "Invalid token")
+    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(401, "User not found")
+    force_logout_at = parse_iso_datetime(user.get("force_logout_at"))
+    if force_logout_at:
+        token_iat = payload.get("iat")
+        if not token_iat or int(token_iat) <= int(force_logout_at.timestamp()):
+            raise HTTPException(401, "Session expired. Please sign in again.")
+    if user.get("deleted_at"):
+        raise HTTPException(403, "Account removed")
     return user
 
 
@@ -592,6 +649,47 @@ class AdminBlueTickBody(BaseModel):
     reason: Optional[str] = None
 
 
+class AdminUserEditBody(BaseModel):
+    full_name: Optional[str] = None
+    username: Optional[str] = None
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    privacy: Optional[str] = None
+    contact_visibility: Optional[str] = None
+
+
+class AdminWarningBody(BaseModel):
+    reason: str = "Please review Glint's community rules."
+
+
+class AdminRestrictionBody(BaseModel):
+    posting_days: Optional[int] = None
+    messaging_days: Optional[int] = None
+    reason: str = "Temporary account restriction"
+
+
+class AdminAppControlsBody(BaseModel):
+    maintenance_mode: Optional[bool] = None
+    maintenance_message: Optional[str] = None
+    registration_enabled: Optional[bool] = None
+    uploads_enabled: Optional[bool] = None
+    posts_enabled: Optional[bool] = None
+    stories_enabled: Optional[bool] = None
+    chat_enabled: Optional[bool] = None
+    verification_enabled: Optional[bool] = None
+
+
+class AppealCreateBody(BaseModel):
+    category: str = "account"
+    reason: str
+
+
+class AdminAppealDecisionBody(BaseModel):
+    decision: str
+    note: str = ""
+    restore_account: bool = False
+
+
 def _email_provider_configured() -> bool:
     if RESEND_API_KEY and RESEND_FROM_EMAIL:
         return True
@@ -621,6 +719,8 @@ async def health():
 # ----------------------------- auth -----------------------------
 @api.post("/auth/register-init")
 async def register_init(body: RegisterInit):
+    if not await app_feature_enabled("registration_enabled", True):
+        raise HTTPException(503, "New account registration is temporarily unavailable.")
     username = body.username.strip().lower()
     if len(username) < 3:
         raise HTTPException(400, "Username must be at least 3 characters")
@@ -781,6 +881,9 @@ async def login(body: LoginBody):
         until_text = f" Until: {suspension['until']}." if suspension.get("until") else ""
         raise HTTPException(403, f"Account suspended. Reason: {suspension['reason']}.{until_text}")
     await db.users.update_one({"id": u["id"]}, {"$set": {"last_seen": now_iso()}})
+    await db.login_events.insert_one({
+        "id": new_id(), "user_id": u["id"], "type": "password_login", "created_at": now_iso()
+    })
     token = make_token(u["id"])
     return {"token": token, "user": public_user(u)}
 
@@ -1131,6 +1234,9 @@ async def feed_posts_for_author(author_id: str, me_id: str):
 
 @api.post("/posts")
 async def create_post(body: PostCreate, me=Depends(get_current_user)):
+    if not await app_feature_enabled("posts_enabled", True):
+        raise HTTPException(503, "Posting is temporarily unavailable.")
+    await ensure_not_restricted(me, "posting_restricted_until", "Posting")
     active, _, _, _ = golden_window()
     doc = {
         "id": new_id(),
@@ -1310,6 +1416,9 @@ async def get_comments(post_id: str, me=Depends(get_current_user)):
 
 @api.post("/posts/{post_id}/comments")
 async def add_comment(post_id: str, body: CommentCreate, me=Depends(get_current_user)):
+    if not await app_feature_enabled("posts_enabled", True):
+        raise HTTPException(503, "Posting is temporarily unavailable.")
+    await ensure_not_restricted(me, "posting_restricted_until", "Commenting")
     p = await db.posts.find_one({"id": post_id, "deleted_at": None})
     if not p:
         raise HTTPException(404, "Post not found")
@@ -1472,6 +1581,9 @@ async def ai_captions(body: CaptionRequest, me=Depends(get_current_user)):
 # ----------------------------- stories -----------------------------
 @api.post("/stories")
 async def create_story(body: StoryCreate, me=Depends(get_current_user)):
+    if not await app_feature_enabled("stories_enabled", True):
+        raise HTTPException(503, "Stories are temporarily unavailable.")
+    await ensure_not_restricted(me, "posting_restricted_until", "Story posting")
     doc = {
         "id": new_id(),
         "author_id": me["id"],
@@ -1726,6 +1838,9 @@ async def get_conversation(user_id: str, me=Depends(get_current_user)):
 
 @api.post("/chat/send")
 async def send_message(body: MessageCreate, me=Depends(get_current_user)):
+    if not await app_feature_enabled("chat_enabled", True):
+        raise HTTPException(503, "Messaging is temporarily unavailable.")
+    await ensure_not_restricted(me, "messaging_restricted_until", "Messaging")
     preview_of = lambda: body.text if body.type == "text" else ("📷 Photo" if body.type == "photo" else "🎤 Voice note")
 
     # group message
@@ -1853,6 +1968,8 @@ def verification_eligibility(user: dict) -> dict:
 
 @api.post("/verification")
 async def submit_verification(body: VerificationSubmit, me=Depends(get_current_user)):
+    if not await app_feature_enabled("verification_enabled", True):
+        raise HTTPException(503, "Verification applications are temporarily unavailable.")
     existing = await db.verifications.find_one({"user_id": me["id"], "status": "pending"})
     if existing:
         raise HTTPException(400, "You already have a pending request")
@@ -1912,12 +2029,23 @@ async def get_config(me=Depends(get_current_user)):
     return {
         "broadcast": cfg.get("broadcast"),
         "force_update": cfg.get("force_update"),
+        "maintenance": cfg.get("maintenance", {"active": False, "message": ""}),
+        "feature_flags": cfg.get("feature_flags", {
+            "registration_enabled": True,
+            "uploads_enabled": True,
+            "posts_enabled": True,
+            "stories_enabled": True,
+            "chat_enabled": True,
+            "verification_enabled": True,
+        }),
     }
 
 
 # ----------------------------- files -----------------------------
 @api.post("/upload")
 async def upload(file: UploadFile = File(...), me=Depends(get_current_user)):
+    if not await app_feature_enabled("uploads_enabled", True):
+        raise HTTPException(503, "Uploads are temporarily unavailable.")
     ext = (file.filename or "bin").split(".")[-1].lower()
     path = f"glint/uploads/{me['id']}/{new_id()}.{ext}"
     data = await file.read()
@@ -1968,13 +2096,19 @@ async def admin_login(body: AdminLogin):
 
 @api.get("/admin/stats")
 async def admin_stats(_=Depends(require_admin)):
+    active_since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     return {
         "users": await db.users.count_documents({"deleted_at": None, "verified": True}),
+        "active_24h": await db.users.count_documents({"deleted_at": None, "last_seen": {"$gte": active_since}}),
         "posts": await db.posts.count_documents({"deleted_at": None}),
+        "comments": await db.comments.count_documents({"deleted_at": None}),
         "stories": await db.stories.count_documents({"deleted_at": None, "expires_at": {"$gt": now_iso()}}),
+        "messages": await db.messages.count_documents({}),
         "pending_verifications": await db.verifications.count_documents({"status": "pending"}),
         "open_tickets": await db.tickets.count_documents({"status": "open"}),
         "open_reports": await db.reports.count_documents({"status": "open"}),
+        "open_appeals": await db.appeals.count_documents({"status": "open"}),
+        "warnings": await db.warnings.count_documents({}),
         "suspended_users": await db.users.count_documents({"deleted_at": None, "suspended": True}),
         "blue_tick_users": await db.users.count_documents({"deleted_at": None, "golden_tick": True}),
     }
@@ -2134,6 +2268,10 @@ def admin_safe_user(u: dict) -> dict:
         "deleted_at": u.get("deleted_at"),
         "deleted_reason": u.get("deleted_reason"),
         "permanent_deleted": bool(u.get("permanent_deleted")),
+        "posting_restricted_until": u.get("posting_restricted_until"),
+        "messaging_restricted_until": u.get("messaging_restricted_until"),
+        "restriction_reason": u.get("restriction_reason"),
+        "force_logout_at": u.get("force_logout_at"),
     })
     return d
 
@@ -2179,9 +2317,29 @@ async def admin_user_full(user_id: str, _=Depends(require_admin)):
             "moderation_reason": cm.get("moderation_reason"),
         })
 
+    stories = []
+    async for st in db.stories.find({"author_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(30):
+        stories.append({
+            "id": st.get("id"), "type": st.get("type"), "text": st.get("text"), "image": st.get("image"),
+            "media": st.get("media"), "created_at": st.get("created_at"), "deleted_at": st.get("deleted_at"),
+            "moderation_reason": st.get("moderation_reason"),
+        })
+
     verifications = []
     async for v in db.verifications.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(10):
         verifications.append(v)
+
+    warnings = [w async for w in db.warnings.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(50)]
+    login_activity = [e async for e in db.login_events.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(30)]
+
+    friends = []
+    async for f in db.friendships.find({"users": user_id}, {"_id": 0}).sort("created_at", -1).limit(50):
+        other_ids = [x for x in f.get("users", []) if x != user_id]
+        if not other_ids:
+            continue
+        fu = await db.users.find_one({"id": other_ids[0], "deleted_at": None}, {"_id": 0})
+        if fu:
+            friends.append(public_user(fu))
 
     history = []
     async for a in db.admin_audit.find({"target_user_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(50):
@@ -2199,7 +2357,14 @@ async def admin_user_full(user_id: str, _=Depends(require_admin)):
         "friends": await db.friendships.count_documents({"users": user_id}),
         "tickets": await db.tickets.count_documents({"user_id": user_id}),
         "reports_made": await db.reports.count_documents({"reporter_id": user_id}),
-        "reports_received": await db.reports.count_documents({"target_id": {"$in": content_ids}}) if content_ids else 0,
+        "reports_received": await db.reports.count_documents({
+            "$or": [
+                {"target_type": "user", "target_id": user_id},
+                {"target_id": {"$in": content_ids}} if content_ids else {"target_id": "__none__"},
+            ]
+        }),
+        "messages_sent": await db.messages.count_documents({"from_user": user_id}),
+        "warnings": await db.warnings.count_documents({"user_id": user_id}),
     }
 
     return {
@@ -2207,6 +2372,10 @@ async def admin_user_full(user_id: str, _=Depends(require_admin)):
         "counts": counts,
         "posts": posts,
         "comments": comments,
+        "stories": stories,
+        "friends": friends,
+        "warnings": warnings,
+        "login_activity": login_activity,
         "verifications": verifications,
         "moderation_history": history,
     }
@@ -2348,6 +2517,302 @@ async def admin_delete_story(story_id: str, body: AdminReasonBody, _=Depends(req
     await admin_notify(s["author_id"], f"Your story was removed by Glint. Reason: {reason}", story_id)
     await admin_audit("delete_story", "story", story_id, reason, s["author_id"])
     return {"ok": True}
+
+
+
+
+@api.post("/admin/users/{user_id}/edit")
+async def admin_edit_user(user_id: str, body: AdminUserEditBody, _=Depends(require_admin)):
+    u = await db.users.find_one({"id": user_id})
+    if not u:
+        raise HTTPException(404, "User not found")
+    update = body.dict(exclude_unset=True)
+    if "username" in update and update["username"] is not None:
+        username = update["username"].strip().lower()
+        if len(username) < 3:
+            raise HTTPException(400, "Username must be at least 3 characters")
+        exists = await db.users.find_one({"username": username, "id": {"$ne": user_id}, "deleted_at": None})
+        if exists:
+            raise HTTPException(400, "Username already taken")
+        update["username"] = username
+    if "full_name" in update and update["full_name"] is not None:
+        update["full_name"] = update["full_name"].strip()
+        if not update["full_name"]:
+            raise HTTPException(400, "Name cannot be empty")
+    if "privacy" in update and update["privacy"] not in {"public", "friends", "only_me"}:
+        raise HTTPException(400, "Invalid profile privacy")
+    if "contact_visibility" in update and update["contact_visibility"] not in {"public", "friends", "only_me"}:
+        raise HTTPException(400, "Invalid contact visibility")
+    if update:
+        await db.users.update_one({"id": user_id}, {"$set": update})
+        await admin_audit("edit_user_profile", "user", user_id, "Profile edited by admin", user_id, {"fields": sorted(update.keys())})
+        await admin_notify(user_id, "Your Glint profile information was updated by an administrator.")
+    fresh = await db.users.find_one({"id": user_id}, {"_id": 0})
+    return admin_safe_user(fresh)
+
+
+@api.post("/admin/users/{user_id}/warn")
+async def admin_warn_user(user_id: str, body: AdminWarningBody, _=Depends(require_admin)):
+    u = await db.users.find_one({"id": user_id, "deleted_at": None})
+    if not u:
+        raise HTTPException(404, "User not found")
+    reason = (body.reason or "Please review Glint's community rules.").strip()
+    doc = {"id": new_id(), "user_id": user_id, "reason": reason, "status": "active", "created_at": now_iso()}
+    await db.warnings.insert_one(doc)
+    await admin_notify(user_id, f"Glint warning: {reason}")
+    await send_moderation_email(u.get("email"), "Glint account warning", reason)
+    await admin_audit("warn_user", "user", user_id, reason, user_id)
+    return {"ok": True, "warning": doc}
+
+
+def _restriction_until(days: Optional[int]) -> Optional[str]:
+    if days is None:
+        return None
+    if days <= 0:
+        return (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat()
+    return (datetime.now(timezone.utc) + timedelta(days=min(days, 3650))).isoformat()
+
+
+@api.post("/admin/users/{user_id}/restrictions")
+async def admin_restrict_user(user_id: str, body: AdminRestrictionBody, _=Depends(require_admin)):
+    u = await db.users.find_one({"id": user_id, "deleted_at": None})
+    if not u:
+        raise HTTPException(404, "User not found")
+    reason = (body.reason or "Temporary account restriction").strip()
+    update = {"restriction_reason": reason}
+    metadata = {}
+    if body.posting_days is not None:
+        update["posting_restricted_until"] = _restriction_until(body.posting_days)
+        metadata["posting_days"] = body.posting_days
+    if body.messaging_days is not None:
+        update["messaging_restricted_until"] = _restriction_until(body.messaging_days)
+        metadata["messaging_days"] = body.messaging_days
+    if len(update) == 1:
+        raise HTTPException(400, "Choose at least one restriction")
+    await db.users.update_one({"id": user_id}, {"$set": update})
+    await admin_notify(user_id, f"Your Glint account has temporary feature restrictions. Reason: {reason}")
+    await admin_audit("restrict_user", "user", user_id, reason, user_id, metadata)
+    return {"ok": True, **update}
+
+
+@api.post("/admin/users/{user_id}/clear-restrictions")
+async def admin_clear_restrictions(user_id: str, body: AdminReasonBody = AdminReasonBody(reason="Restrictions removed"), _=Depends(require_admin)):
+    u = await db.users.find_one({"id": user_id})
+    if not u:
+        raise HTTPException(404, "User not found")
+    await db.users.update_one({"id": user_id}, {"$set": {
+        "posting_restricted_until": None, "messaging_restricted_until": None, "restriction_reason": None
+    }})
+    await admin_notify(user_id, "Your temporary Glint feature restrictions have been removed.")
+    await admin_audit("clear_user_restrictions", "user", user_id, body.reason, user_id)
+    return {"ok": True}
+
+
+@api.post("/admin/users/{user_id}/force-logout")
+async def admin_force_logout(user_id: str, body: AdminReasonBody = AdminReasonBody(reason="Security session reset"), _=Depends(require_admin)):
+    u = await db.users.find_one({"id": user_id})
+    if not u:
+        raise HTTPException(404, "User not found")
+    ts = now_iso()
+    await db.users.update_one({"id": user_id}, {"$set": {"force_logout_at": ts}})
+    await admin_audit("force_logout", "user", user_id, body.reason, user_id)
+    return {"ok": True, "force_logout_at": ts}
+
+
+@api.post("/admin/posts/{post_id}/restore")
+async def admin_restore_post(post_id: str, body: AdminReasonBody = AdminReasonBody(reason="Content restored after review"), _=Depends(require_admin)):
+    p = await db.posts.find_one({"id": post_id})
+    if not p:
+        raise HTTPException(404, "Post not found")
+    await db.posts.update_one({"id": post_id}, {"$set": {"deleted_at": None, "moderation_reason": None, "moderated_by": None}})
+    await admin_notify(p["author_id"], f"Your post was restored by Glint. Note: {body.reason}", post_id)
+    await admin_audit("restore_post", "post", post_id, body.reason, p["author_id"])
+    return {"ok": True}
+
+
+@api.post("/admin/comments/{comment_id}/restore")
+async def admin_restore_comment(comment_id: str, body: AdminReasonBody = AdminReasonBody(reason="Content restored after review"), _=Depends(require_admin)):
+    cm = await db.comments.find_one({"id": comment_id})
+    if not cm:
+        raise HTTPException(404, "Comment not found")
+    await db.comments.update_one({"id": comment_id}, {"$set": {"deleted_at": None, "moderation_reason": None, "moderated_by": None}})
+    await admin_notify(cm["author_id"], f"Your comment was restored by Glint. Note: {body.reason}", cm.get("post_id"))
+    await admin_audit("restore_comment", "comment", comment_id, body.reason, cm["author_id"])
+    return {"ok": True}
+
+
+@api.post("/admin/stories/{story_id}/restore")
+async def admin_restore_story(story_id: str, body: AdminReasonBody = AdminReasonBody(reason="Content restored after review"), _=Depends(require_admin)):
+    st = await db.stories.find_one({"id": story_id})
+    if not st:
+        raise HTTPException(404, "Story not found")
+    await db.stories.update_one({"id": story_id}, {"$set": {"deleted_at": None, "moderation_reason": None, "moderated_by": None}})
+    await admin_notify(st["author_id"], f"Your story was restored by Glint. Note: {body.reason}", story_id)
+    await admin_audit("restore_story", "story", story_id, body.reason, st["author_id"])
+    return {"ok": True}
+
+
+@api.get("/admin/content")
+async def admin_content(kind: str = Query("all"), status: str = Query("all"), _=Depends(require_admin)):
+    kind = kind.lower()
+    status = status.lower()
+
+    def status_query():
+        if status == "active":
+            return {"deleted_at": None}
+        if status == "removed":
+            return {"deleted_at": {"$ne": None}}
+        return {}
+
+    out = []
+    if kind in {"all", "post"}:
+        async for p in db.posts.find(status_query(), {"_id": 0}).sort("created_at", -1).limit(60):
+            au = await db.users.find_one({"id": p.get("author_id")}, {"_id": 0})
+            out.append({
+                "kind": "post", "id": p.get("id"), "text": p.get("text"), "image": p.get("image"),
+                "created_at": p.get("created_at"), "deleted_at": p.get("deleted_at"),
+                "moderation_reason": p.get("moderation_reason"), "author": public_user(au) if au else None,
+            })
+    if kind in {"all", "story"}:
+        async for st in db.stories.find(status_query(), {"_id": 0}).sort("created_at", -1).limit(60):
+            au = await db.users.find_one({"id": st.get("author_id")}, {"_id": 0})
+            out.append({
+                "kind": "story", "id": st.get("id"), "text": st.get("text"), "image": st.get("image"),
+                "media": st.get("media"), "created_at": st.get("created_at"), "deleted_at": st.get("deleted_at"),
+                "moderation_reason": st.get("moderation_reason"), "author": public_user(au) if au else None,
+            })
+    if kind in {"all", "comment"}:
+        async for cm in db.comments.find(status_query(), {"_id": 0}).sort("created_at", -1).limit(60):
+            au = await db.users.find_one({"id": cm.get("author_id")}, {"_id": 0})
+            out.append({
+                "kind": "comment", "id": cm.get("id"), "text": cm.get("text"), "post_id": cm.get("post_id"),
+                "created_at": cm.get("created_at"), "deleted_at": cm.get("deleted_at"),
+                "moderation_reason": cm.get("moderation_reason"), "author": public_user(au) if au else None,
+            })
+    out.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return out[:100]
+
+
+@api.get("/admin/appeals")
+async def admin_appeals(_=Depends(require_admin)):
+    out = []
+    async for a in db.appeals.find({}, {"_id": 0}).sort("created_at", -1).limit(100):
+        u = await db.users.find_one({"id": a.get("user_id")}, {"_id": 0})
+        a["user"] = admin_safe_user(u) if u else None
+        out.append(a)
+    return out
+
+
+@api.post("/admin/appeals/{appeal_id}/decision")
+async def admin_appeal_decision(appeal_id: str, body: AdminAppealDecisionBody, _=Depends(require_admin)):
+    appeal = await db.appeals.find_one({"id": appeal_id})
+    if not appeal:
+        raise HTTPException(404, "Appeal not found")
+    decision = body.decision.strip().lower()
+    if decision not in {"approved", "rejected"}:
+        raise HTTPException(400, "Decision must be approved or rejected")
+    note = body.note.strip()
+    await db.appeals.update_one({"id": appeal_id}, {"$set": {
+        "status": decision, "admin_note": note, "reviewed_at": now_iso()
+    }})
+    user_id = appeal.get("user_id")
+    if decision == "approved" and body.restore_account and user_id:
+        await db.users.update_one({"id": user_id}, {"$set": {
+            "suspended": False, "suspended_until": None, "suspend_reason": None
+        }})
+    if user_id:
+        await admin_notify(user_id, f"Your Glint appeal was {decision}. {note}".strip())
+    await admin_audit(f"{decision}_appeal", "appeal", appeal_id, note, user_id, {"restore_account": body.restore_account})
+    return {"ok": True, "status": decision}
+
+
+@api.get("/admin/controls")
+async def admin_get_controls(_=Depends(require_admin)):
+    cfg = await db.config.find_one({"id": "app"}, {"_id": 0}) or {}
+    return {
+        "broadcast": cfg.get("broadcast") or {"message": "", "active": False},
+        "force_update": cfg.get("force_update") or {"active": False, "message": "", "min_version": None},
+        "maintenance": cfg.get("maintenance") or {"active": False, "message": ""},
+        "feature_flags": cfg.get("feature_flags") or {
+            "registration_enabled": True,
+            "uploads_enabled": True,
+            "posts_enabled": True,
+            "stories_enabled": True,
+            "chat_enabled": True,
+            "verification_enabled": True,
+        },
+    }
+
+
+@api.post("/admin/controls")
+async def admin_set_controls(body: AdminAppControlsBody, _=Depends(require_admin)):
+    incoming = body.dict(exclude_unset=True)
+    cfg = await db.config.find_one({"id": "app"}, {"_id": 0}) or {}
+    flags = dict(cfg.get("feature_flags") or {
+        "registration_enabled": True,
+        "uploads_enabled": True,
+        "posts_enabled": True,
+        "stories_enabled": True,
+        "chat_enabled": True,
+        "verification_enabled": True,
+    })
+    maintenance = dict(cfg.get("maintenance") or {"active": False, "message": ""})
+    if "maintenance_mode" in incoming:
+        maintenance["active"] = bool(incoming.pop("maintenance_mode"))
+    if "maintenance_message" in incoming:
+        maintenance["message"] = incoming.pop("maintenance_message") or ""
+    for key in list(incoming.keys()):
+        if key in flags:
+            flags[key] = bool(incoming[key])
+    await db.config.update_one({"id": "app"}, {"$set": {
+        "id": "app", "maintenance": maintenance, "feature_flags": flags
+    }}, upsert=True)
+    await admin_audit("update_app_controls", "config", "app", "App controls updated", None, {"maintenance": maintenance, "feature_flags": flags})
+    return {"ok": True, "maintenance": maintenance, "feature_flags": flags}
+
+
+@api.get("/admin/system")
+async def admin_system(_=Depends(require_admin)):
+    mongo_ok = False
+    try:
+        await client.admin.command("ping")
+        mongo_ok = True
+    except Exception:
+        mongo_ok = False
+    return {
+        "api": True,
+        "mongodb": mongo_ok,
+        "email_configured": _email_provider_configured(),
+        "email_provider": "resend" if RESEND_API_KEY else ("smtp" if _email_provider_configured() else "none"),
+        "sms_configured": _infobip_sms_configured() or _twilio_verify_configured(),
+        "sms_provider": "infobip" if _infobip_sms_configured() else ("twilio_verify" if _twilio_verify_configured() else "none"),
+        "users": await db.users.count_documents({"deleted_at": None}),
+        "files": await db.files.count_documents({}),
+        "open_reports": await db.reports.count_documents({"status": "open"}),
+        "open_tickets": await db.tickets.count_documents({"status": "open"}),
+        "open_appeals": await db.appeals.count_documents({"status": "open"}),
+    }
+
+
+@api.post("/appeals")
+async def submit_appeal(body: AppealCreateBody, me=Depends(get_authenticated_user_allow_suspended)):
+    reason = body.reason.strip()
+    if len(reason) < 10:
+        raise HTTPException(400, "Please explain your appeal in more detail.")
+    existing = await db.appeals.find_one({"user_id": me["id"], "status": "open"})
+    if existing:
+        return {"ok": True, "id": existing["id"], "duplicate": True}
+    doc = {
+        "id": new_id(), "user_id": me["id"], "category": body.category.strip() or "account",
+        "reason": reason, "status": "open", "created_at": now_iso()
+    }
+    await db.appeals.insert_one(doc)
+    return {"ok": True, "id": doc["id"]}
+
+
+@api.get("/appeals/me")
+async def my_appeals(me=Depends(get_authenticated_user_allow_suspended)):
+    return [a async for a in db.appeals.find({"user_id": me["id"]}, {"_id": 0}).sort("created_at", -1).limit(20)]
 
 
 @api.get("/admin/audit")
