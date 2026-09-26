@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { View, Text, ScrollView, Pressable, TextInput, Modal, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -19,7 +19,15 @@ type ActionKind =
   | "revoke"
   | "deleteAccount"
   | "deletePost"
-  | "deleteComment";
+  | "restorePost"
+  | "deleteComment"
+  | "restoreComment"
+  | "deleteStory"
+  | "restoreStory"
+  | "warn"
+  | "restrict"
+  | "clearRestrictions"
+  | "forceLogout";
 
 type PendingAction = {
   kind: ActionKind;
@@ -39,6 +47,16 @@ export default function AdminUserDetail() {
   const [action, setAction] = useState<PendingAction | null>(null);
   const [reason, setReason] = useState("");
   const [days, setDays] = useState("7");
+  const [postingDays, setPostingDays] = useState("7");
+  const [messagingDays, setMessagingDays] = useState("7");
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editUsername, setEditUsername] = useState("");
+  const [editBio, setEditBio] = useState("");
+  const [editLocation, setEditLocation] = useState("");
+  const [editPrivacy, setEditPrivacy] = useState("public");
+  const [editContactVisibility, setEditContactVisibility] = useState("only_me");
 
   const detail = useQuery({
     queryKey: ["admin-user-full", id],
@@ -46,10 +64,41 @@ export default function AdminUserDetail() {
     enabled: !!id,
   });
 
+  const u = detail.data?.user;
+
+  useEffect(() => {
+    if (!u || !editOpen) return;
+    setEditName(u.full_name || "");
+    setEditUsername(u.username || "");
+    setEditBio(u.bio || "");
+    setEditLocation(u.location || "");
+    setEditPrivacy(u.privacy || "public");
+    setEditContactVisibility(u.contact_visibility || "only_me");
+  }, [editOpen, u]);
+
+  const editProfile = useMutation({
+    mutationFn: () => api.post(`/admin/users/${id}/edit`, {
+      full_name: editName.trim(),
+      username: editUsername.trim(),
+      bio: editBio.trim() || null,
+      location: editLocation.trim() || null,
+      privacy: editPrivacy,
+      contact_visibility: editContactVisibility,
+    }, true),
+    onSuccess: () => {
+      toast.show("Profile updated", "success");
+      setEditOpen(false);
+      detail.refetch();
+      qc.invalidateQueries({ queryKey: ["admin-users"] });
+      qc.invalidateQueries({ queryKey: ["admin-audit"] });
+    },
+    onError: (e: any) => toast.show(e.message || "Could not update profile", "error"),
+  });
+
   const runAction = useMutation({
     mutationFn: async () => {
       if (!action) return;
-      const why = reason.trim() || "Violation of Glint rules";
+      const why = reason.trim() || "Glint administrator action";
       switch (action.kind) {
         case "suspend":
           return api.post(`/admin/users/${id}/suspend`, { reason: why, duration_days: Math.max(0, Number(days) || 0) }, true);
@@ -63,8 +112,28 @@ export default function AdminUserDetail() {
           return api.post(`/admin/users/${id}/permanent-delete`, { reason: why }, true);
         case "deletePost":
           return api.post(`/admin/posts/${action.targetId}/delete`, { reason: why }, true);
+        case "restorePost":
+          return api.post(`/admin/posts/${action.targetId}/restore`, { reason: why }, true);
         case "deleteComment":
           return api.post(`/admin/comments/${action.targetId}/delete`, { reason: why }, true);
+        case "restoreComment":
+          return api.post(`/admin/comments/${action.targetId}/restore`, { reason: why }, true);
+        case "deleteStory":
+          return api.post(`/admin/stories/${action.targetId}/delete`, { reason: why }, true);
+        case "restoreStory":
+          return api.post(`/admin/stories/${action.targetId}/restore`, { reason: why }, true);
+        case "warn":
+          return api.post(`/admin/users/${id}/warn`, { reason: why }, true);
+        case "restrict":
+          return api.post(`/admin/users/${id}/restrictions`, {
+            posting_days: Math.max(0, Number(postingDays) || 0),
+            messaging_days: Math.max(0, Number(messagingDays) || 0),
+            reason: why,
+          }, true);
+        case "clearRestrictions":
+          return api.post(`/admin/users/${id}/clear-restrictions`, { reason: why }, true);
+        case "forceLogout":
+          return api.post(`/admin/users/${id}/force-logout`, { reason: why }, true);
       }
     },
     onSuccess: () => {
@@ -73,18 +142,23 @@ export default function AdminUserDetail() {
       setAction(null);
       setReason("");
       setDays("7");
+      setPostingDays("7");
+      setMessagingDays("7");
       qc.invalidateQueries({ queryKey: ["admin-users"] });
       qc.invalidateQueries({ queryKey: ["admin-audit"] });
+      qc.invalidateQueries({ queryKey: ["admin-stats"] });
       if (deletedAccount) router.back();
       else detail.refetch();
     },
     onError: (e: any) => toast.show(e.message || "Action failed", "error"),
   });
 
-  function openAction(next: PendingAction) {
+  function openAction(next: PendingAction, defaultReason = "") {
     setAction(next);
-    setReason("");
+    setReason(defaultReason);
     setDays("7");
+    setPostingDays("7");
+    setMessagingDays("7");
   }
 
   if (detail.isLoading) {
@@ -101,7 +175,6 @@ export default function AdminUserDetail() {
   }
 
   const data = detail.data;
-  const u = data.user;
   const statusText = u.permanent_deleted ? "Removed" : u.suspended ? "Suspended" : "Active";
 
   return (
@@ -112,8 +185,11 @@ export default function AdminUserDetail() {
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>User Control</Text>
-          <Text style={styles.subtitle}>Full account & moderation view</Text>
+          <Text style={styles.subtitle}>Profile, safety, content & account access</Text>
         </View>
+        <Pressable style={styles.iconBtn} onPress={() => detail.refetch()}>
+          <Icon name="refresh-outline" size={21} color={colors.onSurface} />
+        </Pressable>
       </View>
 
       <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg, paddingBottom: insets.bottom + 40 }}>
@@ -122,7 +198,7 @@ export default function AdminUserDetail() {
           <View style={styles.profileTop}>
             <Avatar uri={u.avatar} name={u.full_name} size={72} />
             <View style={{ flex: 1 }}>
-              <UserName name={u.full_name} verified={u.verified} size={19} />
+              <UserName name={u.full_name} verified={u.blue_tick} size={19} />
               <Text style={styles.username}>@{u.username}</Text>
               <View style={styles.pills}>
                 <Pill text={statusText} tone={u.suspended || u.permanent_deleted ? "danger" : "good"} />
@@ -136,11 +212,19 @@ export default function AdminUserDetail() {
           <Info label="Phone" value={u.phone || "Not added"} />
           <Info label="Joined" value={u.created_at ? new Date(u.created_at).toLocaleString() : "Unknown"} />
           <Info label="Last seen" value={u.last_seen ? new Date(u.last_seen).toLocaleString() : "Unknown"} />
-          <Info label="Bio" value={u.bio || "Not added"} />\n          <Info label="Location" value={u.location || "Not added"} />\n          <Info label="Privacy" value={u.privacy || "public"} />
+          <Info label="Bio" value={u.bio || "Not added"} />
+          <Info label="Location" value={u.location || "Not added"} />
+          <Info label="Profile privacy" value={u.privacy || "public"} />
+          <Info label="Contact visibility" value={u.contact_visibility || "only_me"} />
           <Info label="Sparks" value={String(u.sparks ?? 0)} />
           {!!u.suspended_until && <Info label="Suspended until" value={new Date(u.suspended_until).toLocaleString()} />}
           {!!u.suspend_reason && <Info label="Suspension reason" value={u.suspend_reason} />}
-          <Text style={styles.securityNote}>For security, passwords, password hashes, OTP codes and private authentication secrets are never displayed in the admin dashboard.</Text>
+          {!!u.posting_restricted_until && <Info label="Posting restricted until" value={new Date(u.posting_restricted_until).toLocaleString()} />}
+          {!!u.messaging_restricted_until && <Info label="Messaging restricted until" value={new Date(u.messaging_restricted_until).toLocaleString()} />}
+          {!!u.restriction_reason && <Info label="Restriction reason" value={u.restriction_reason} />}
+
+          <Button title="Edit profile details" small variant="secondary" onPress={() => setEditOpen(true)} style={{ alignSelf: "flex-start", marginTop: spacing.sm }} />
+          <Text style={styles.securityNote}>Security rule: passwords, password hashes, OTP codes and private service keys are never displayed or editable from the dashboard.</Text>
         </View>
 
         <View style={styles.statsRow}>
@@ -148,27 +232,36 @@ export default function AdminUserDetail() {
           <MiniStat label="Comments" value={data.counts?.comments} />
           <MiniStat label="Stories" value={data.counts?.stories} />
           <MiniStat label="Friends" value={data.counts?.friends} />
+          <MiniStat label="Messages sent" value={data.counts?.messages_sent} />
+          <MiniStat label="Warnings" value={data.counts?.warnings} />
           <MiniStat label="Tickets" value={data.counts?.tickets} />
-          <MiniStat label="Reports made" value={data.counts?.reports_made} />\n          <MiniStat label="Reports received" value={data.counts?.reports_received} />
+          <MiniStat label="Reports made" value={data.counts?.reports_made} />
+          <MiniStat label="Reports received" value={data.counts?.reports_received} />
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account actions</Text>
+          <Text style={styles.sectionTitle}>Account & safety controls</Text>
           <View style={styles.actionGrid}>
             <Button
               title={u.blue_tick ? "Remove Blue Tick" : "Grant Blue Tick"}
-              small
-              variant="secondary"
-              onPress={() => openAction({ kind: u.blue_tick ? "revoke" : "grant", title: u.blue_tick ? "Remove Blue Tick" : "Grant Blue Tick" })}
+              small variant="secondary"
+              onPress={() => openAction({ kind: u.blue_tick ? "revoke" : "grant", title: u.blue_tick ? "Remove Blue Tick" : "Grant Blue Tick" }, u.blue_tick ? "Blue Tick removed by Glint administrator" : "Blue Tick granted by Glint administrator")}
               style={{ flex: 1 }}
             />
             <Button
               title={u.suspended ? "Restore account" : "Suspend account"}
-              small
-              variant="secondary"
+              small variant="secondary"
               onPress={() => openAction({ kind: u.suspended ? "restore" : "suspend", title: u.suspended ? "Restore account" : "Suspend account" })}
               style={{ flex: 1 }}
             />
+          </View>
+          <View style={styles.actionGrid}>
+            <Button title="Send warning" small variant="secondary" onPress={() => openAction({ kind: "warn", title: "Send account warning" })} style={{ flex: 1 }} />
+            <Button title="Restrict features" small variant="secondary" onPress={() => openAction({ kind: "restrict", title: "Restrict posting & messaging" })} style={{ flex: 1 }} />
+          </View>
+          <View style={styles.actionGrid}>
+            <Button title="Clear restrictions" small variant="secondary" onPress={() => openAction({ kind: "clearRestrictions", title: "Clear feature restrictions" }, "Restrictions removed after admin review")} style={{ flex: 1 }} />
+            <Button title="Force logout" small variant="secondary" onPress={() => openAction({ kind: "forceLogout", title: "Force logout on all sessions" }, "Security session reset")} style={{ flex: 1 }} />
           </View>
           <Button
             title="Permanently delete account"
@@ -179,25 +272,66 @@ export default function AdminUserDetail() {
         </View>
 
         <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Friends</Text>
+          {!data.friends?.length ? <Text style={styles.empty}>No friends.</Text> : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
+              {data.friends.map((friend: any) => (
+                <View key={friend.id} style={styles.friendCard}>
+                  <Avatar uri={friend.avatar} name={friend.full_name} size={42} />
+                  <Text style={styles.friendName} numberOfLines={1}>{friend.full_name}</Text>
+                  <Text style={styles.cardMeta} numberOfLines={1}>@{friend.username}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+
+        <View style={styles.section}>
           <Text style={styles.sectionTitle}>Recent posts</Text>
           {!data.posts?.length ? <Text style={styles.empty}>No posts.</Text> : data.posts.map((p: any) => (
             <View key={p.id} style={styles.contentCard}>
               <View style={styles.cardTop}>
                 <Text style={styles.cardMeta}>{p.type || "post"} · {p.created_at ? timeAgo(p.created_at) : ""}</Text>
-                {p.deleted_at ? <Pill text="Deleted" tone="danger" /> : null}
+                {p.deleted_at ? <Pill text="Removed" tone="danger" /> : null}
               </View>
               {!!p.text && <Text style={styles.bodyText}>{p.text}</Text>}
               {!!p.image && <Image source={{ uri: fileUrl(p.image) }} style={styles.media} contentFit="cover" />}
               {!!p.moderation_reason && <Text style={styles.reasonText}>Reason: {p.moderation_reason}</Text>}
-              {!p.deleted_at && (
-                <Button
-                  title="Delete post"
-                  small
-                  variant="danger"
-                  onPress={() => openAction({ kind: "deletePost", targetId: p.id, title: "Delete post" })}
-                  style={{ alignSelf: "flex-start" }}
-                />
-              )}
+              <Button
+                title={p.deleted_at ? "Restore post" : "Delete post"}
+                small variant={p.deleted_at ? "secondary" : "danger"}
+                onPress={() => openAction({
+                  kind: p.deleted_at ? "restorePost" : "deletePost",
+                  targetId: p.id,
+                  title: p.deleted_at ? "Restore post" : "Delete post",
+                }, p.deleted_at ? "Restored after admin review" : "")}
+                style={{ alignSelf: "flex-start" }}
+              />
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Recent stories</Text>
+          {!data.stories?.length ? <Text style={styles.empty}>No stories.</Text> : data.stories.map((st: any) => (
+            <View key={st.id} style={styles.contentCard}>
+              <View style={styles.cardTop}>
+                <Text style={styles.cardMeta}>{st.type || "story"} · {st.created_at ? timeAgo(st.created_at) : ""}</Text>
+                {st.deleted_at ? <Pill text="Removed" tone="danger" /> : null}
+              </View>
+              {!!st.text && <Text style={styles.bodyText}>{st.text}</Text>}
+              {!!st.image && <Image source={{ uri: fileUrl(st.image) }} style={styles.media} contentFit="cover" />}
+              {!!st.moderation_reason && <Text style={styles.reasonText}>Reason: {st.moderation_reason}</Text>}
+              <Button
+                title={st.deleted_at ? "Restore story" : "Delete story"}
+                small variant={st.deleted_at ? "secondary" : "danger"}
+                onPress={() => openAction({
+                  kind: st.deleted_at ? "restoreStory" : "deleteStory",
+                  targetId: st.id,
+                  title: st.deleted_at ? "Restore story" : "Delete story",
+                }, st.deleted_at ? "Restored after admin review" : "")}
+                style={{ alignSelf: "flex-start" }}
+              />
             </View>
           ))}
         </View>
@@ -208,29 +342,51 @@ export default function AdminUserDetail() {
             <View key={cm.id} style={styles.contentCard}>
               <View style={styles.cardTop}>
                 <Text style={styles.cardMeta}>{cm.created_at ? timeAgo(cm.created_at) : ""} · Post {String(cm.post_id || "").slice(0, 8)}</Text>
-                {cm.deleted_at ? <Pill text="Deleted" tone="danger" /> : null}
+                {cm.deleted_at ? <Pill text="Removed" tone="danger" /> : null}
               </View>
               <Text style={styles.bodyText}>{cm.text}</Text>
               {!!cm.moderation_reason && <Text style={styles.reasonText}>Reason: {cm.moderation_reason}</Text>}
-              {!cm.deleted_at && (
-                <Button
-                  title="Delete comment"
-                  small
-                  variant="danger"
-                  onPress={() => openAction({ kind: "deleteComment", targetId: cm.id, title: "Delete comment" })}
-                  style={{ alignSelf: "flex-start" }}
-                />
-              )}
+              <Button
+                title={cm.deleted_at ? "Restore comment" : "Delete comment"}
+                small variant={cm.deleted_at ? "secondary" : "danger"}
+                onPress={() => openAction({
+                  kind: cm.deleted_at ? "restoreComment" : "deleteComment",
+                  targetId: cm.id,
+                  title: cm.deleted_at ? "Restore comment" : "Delete comment",
+                }, cm.deleted_at ? "Restored after admin review" : "")}
+                style={{ alignSelf: "flex-start" }}
+              />
             </View>
           ))}
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Verification history</Text>
+          <Text style={styles.sectionTitle}>Warnings</Text>
+          {!data.warnings?.length ? <Text style={styles.empty}>No warnings.</Text> : data.warnings.map((w: any) => (
+            <View key={w.id} style={styles.contentCard}>
+              <Text style={styles.bodyText}>{w.reason}</Text>
+              <Text style={styles.cardMeta}>{w.created_at ? new Date(w.created_at).toLocaleString() : ""}</Text>
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Login activity</Text>
+          {!data.login_activity?.length ? <Text style={styles.empty}>No login events recorded yet.</Text> : data.login_activity.map((e: any) => (
+            <View key={e.id} style={styles.contentCard}>
+              <Text style={styles.bodyText}>{String(e.type || "login").replaceAll("_", " ")}</Text>
+              <Text style={styles.cardMeta}>{e.created_at ? new Date(e.created_at).toLocaleString() : ""}</Text>
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Blue Tick verification history</Text>
           {!data.verifications?.length ? <Text style={styles.empty}>No verification requests.</Text> : data.verifications.map((v: any) => (
             <View key={v.id} style={styles.contentCard}>
               <Text style={styles.bodyText}>{v.status?.toUpperCase()} · {v.full_legal_name || "No legal name"}</Text>
               <Text style={styles.cardMeta}>{v.created_at ? new Date(v.created_at).toLocaleString() : ""}</Text>
+              {v.review_reason ? <Text style={styles.reasonText}>Review: {v.review_reason}</Text> : null}
               <View style={styles.verificationMedia}>
                 {!!v.document && <Image source={{ uri: fileUrl(v.document) }} style={styles.smallMedia} contentFit="cover" />}
                 {!!v.selfie && <Image source={{ uri: fileUrl(v.selfie) }} style={styles.smallMedia} contentFit="cover" />}
@@ -240,7 +396,7 @@ export default function AdminUserDetail() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Moderation history</Text>
+          <Text style={styles.sectionTitle}>Admin audit history</Text>
           {!data.moderation_history?.length ? <Text style={styles.empty}>No admin actions yet.</Text> : data.moderation_history.map((a: any) => (
             <View key={a.id} style={styles.contentCard}>
               <Text style={styles.bodyText}>{String(a.action || "").replaceAll("_", " ")}</Text>
@@ -251,22 +407,68 @@ export default function AdminUserDetail() {
         </View>
       </ScrollView>
 
+      <Modal visible={editOpen} transparent animationType="fade" onRequestClose={() => setEditOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <ScrollView contentContainerStyle={styles.modalCard}>
+            <Text style={styles.modalTitle}>Edit user profile</Text>
+            <TextInput value={editName} onChangeText={setEditName} placeholder="Full name" placeholderTextColor={colors.muted} style={styles.input} />
+            <TextInput value={editUsername} onChangeText={setEditUsername} autoCapitalize="none" placeholder="Username" placeholderTextColor={colors.muted} style={styles.input} />
+            <TextInput value={editBio} onChangeText={setEditBio} placeholder="Bio" placeholderTextColor={colors.muted} multiline style={[styles.input, styles.reasonInput]} />
+            <TextInput value={editLocation} onChangeText={setEditLocation} placeholder="Location" placeholderTextColor={colors.muted} style={styles.input} />
+
+            <Text style={styles.modalHint}>Profile privacy</Text>
+            <View style={styles.choiceRow}>
+              {["public", "friends", "only_me"].map((x) => <Choice key={x} label={x} active={editPrivacy === x} onPress={() => setEditPrivacy(x)} />)}
+            </View>
+            <Text style={styles.modalHint}>Contact visibility</Text>
+            <View style={styles.choiceRow}>
+              {["public", "friends", "only_me"].map((x) => <Choice key={x} label={x} active={editContactVisibility === x} onPress={() => setEditContactVisibility(x)} />)}
+            </View>
+
+            <Button title="Save profile" onPress={() => editProfile.mutate()} loading={editProfile.isPending} disabled={!editName.trim() || !editUsername.trim()} />
+            <Pressable onPress={() => setEditOpen(false)}><Text style={styles.cancel}>Cancel</Text></Pressable>
+          </ScrollView>
+        </View>
+      </Modal>
+
       <Modal visible={!!action} transparent animationType="fade" onRequestClose={() => setAction(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{action?.title}</Text>
-            <Text style={styles.modalHint}>Write the reason. The user will be told this reason where applicable, and it will be saved in the admin audit log.</Text>
+            <Text style={styles.modalHint}>The reason is saved to the admin audit log and is shown to the user where applicable.</Text>
+
             {action?.kind === "suspend" && (
               <TextInput
                 value={days}
                 onChangeText={setDays}
                 keyboardType="number-pad"
-                placeholder="Suspension days (30 ≈ 1 month, 0 = indefinite)"
+                placeholder="Suspension days (0 = long-term)"
                 placeholderTextColor={colors.muted}
                 style={styles.input}
-                testID="admin-suspension-days"
               />
             )}
+
+            {action?.kind === "restrict" && (
+              <>
+                <TextInput
+                  value={postingDays}
+                  onChangeText={setPostingDays}
+                  keyboardType="number-pad"
+                  placeholder="Posting restriction days"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                />
+                <TextInput
+                  value={messagingDays}
+                  onChangeText={setMessagingDays}
+                  keyboardType="number-pad"
+                  placeholder="Messaging restriction days"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                />
+              </>
+            )}
+
             <TextInput
               value={reason}
               onChangeText={setReason}
@@ -278,7 +480,7 @@ export default function AdminUserDetail() {
             />
             <Button
               title={action?.kind === "deleteAccount" ? "Confirm permanent delete" : "Confirm"}
-              variant={action?.kind === "deleteAccount" || action?.kind === "deletePost" || action?.kind === "deleteComment" ? "danger" : "primary"}
+              variant={["deleteAccount", "deletePost", "deleteComment", "deleteStory"].includes(action?.kind || "") ? "danger" : "primary"}
               onPress={() => runAction.mutate()}
               loading={runAction.isPending}
               disabled={!reason.trim()}
@@ -307,6 +509,16 @@ function Pill({ text, tone }: { text: string; tone: "good" | "danger" | "blue" }
   const bg = tone === "blue" ? "#E8F1FF" : tone === "danger" ? "#FEECEC" : "#E8F7ED";
   const fg = tone === "blue" ? "#1877F2" : tone === "danger" ? "#C62828" : "#24733D";
   return <View style={[styles.pill, { backgroundColor: bg }]}><Text style={[styles.pillText, { color: fg }]}>{text}</Text></View>;
+}
+
+function Choice({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  return (
+    <Pressable onPress={onPress} style={[styles.choice, active && { backgroundColor: colors.brandPrimary }]}>
+      <Text style={[styles.choiceText, { color: active ? colors.onBrandPrimary : colors.onSurface }]}>{label.replace("_", " ")}</Text>
+    </Pressable>
+  );
 }
 
 const useStyles = makeStyles((c) => ({
@@ -344,11 +556,16 @@ const useStyles = makeStyles((c) => ({
   verificationMedia: { flexDirection: "row", gap: spacing.sm },
   smallMedia: { flex: 1, height: 120, borderRadius: radius.sm, backgroundColor: c.surfaceTertiary },
   empty: { color: c.muted, fontFamily: fonts.text, fontSize: 14 },
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)", justifyContent: "center", padding: spacing.xl },
-  modalCard: { backgroundColor: c.surface, borderRadius: radius.lg, padding: spacing.xl, gap: spacing.md, borderWidth: 1, borderColor: c.border },
+  friendCard: { width: 120, backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.md, alignItems: "center", gap: 4 },
+  friendName: { color: c.onSurface, fontFamily: fonts.semibold, fontSize: 12, maxWidth: 100 },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.38)", justifyContent: "center", padding: spacing.xl },
+  modalCard: { backgroundColor: c.surface, borderRadius: radius.lg, padding: spacing.xl, gap: spacing.md, borderWidth: 1, borderColor: c.border, maxHeight: "90%" },
   modalTitle: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 21 },
   modalHint: { color: c.muted, fontFamily: fonts.text, fontSize: 13, lineHeight: 19 },
   input: { backgroundColor: c.surfaceTertiary, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.md, color: c.onSurface, fontFamily: fonts.text, fontSize: 15 },
-  reasonInput: { minHeight: 100, textAlignVertical: "top" },
+  reasonInput: { minHeight: 90, textAlignVertical: "top" },
   cancel: { color: c.onSurfaceSecondary, fontFamily: fonts.semibold, fontSize: 15, textAlign: "center", paddingVertical: spacing.sm },
+  choiceRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  choice: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.pill, backgroundColor: c.surfaceTertiary },
+  choiceText: { fontFamily: fonts.semibold, fontSize: 12, textTransform: "capitalize" },
 }));
