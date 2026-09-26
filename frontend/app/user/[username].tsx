@@ -12,6 +12,7 @@ import { Icon } from "@/src/components/Icon";
 import { PostCard } from "@/src/components/PostCard";
 import { Button } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
+import { ReportModal } from "@/src/components/ReportModal";
 
 const DEFAULT_COVER = "https://images.unsplash.com/photo-1511081692775-05d0f180a065?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHwxfHxhZXN0aGV0aWMlMjBjYWZlJTIwaW50ZXJpb3J8ZW58MHx8fHwxNzkwMjcxMjM2fDA&ixlib=rb-4.1.0&q=85";
 
@@ -24,6 +25,7 @@ export default function UserProfile() {
   const { username } = useLocalSearchParams<{ username: string }>();
   const qc = useQueryClient();
   const [menu, setMenu] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
 
   const profile = useQuery({ queryKey: ["profile", username], queryFn: () => api.get(`/users/${username}`) });
   const data = profile.data;
@@ -84,6 +86,10 @@ export default function UserProfile() {
                 <Text style={[styles.menuText, { color: colors.brandSecondary }]}>{data.is_inner ? "Remove from Inner Circle" : "Add to Inner Circle"}</Text>
               </Pressable>
             )}
+            <Pressable style={styles.menuItem} onPress={() => { setMenu(false); setReportOpen(true); }} testID="user-report">
+              <Icon name="flag-outline" size={18} color={colors.error} />
+              <Text style={[styles.menuText, { color: colors.error }]}>Report account</Text>
+            </Pressable>
             <Pressable style={styles.menuItem} onPress={() => block.mutate()} testID="user-block">
               <Icon name="ban-outline" size={18} color={colors.error} />
               <Text style={[styles.menuText, { color: colors.error }]}>Block user</Text>
@@ -113,6 +119,27 @@ export default function UserProfile() {
           <View style={styles.locationRow}><Icon name="location-outline" size={15} color={colors.muted} /><Text style={styles.location}>{data.location}</Text></View>
         )}
 
+        {(data.email || data.phone) && (
+          <View style={styles.contactCard}>
+            <View style={styles.contactTitleRow}>
+              <Icon name="lock-open-outline" size={16} color={colors.brand} />
+              <Text style={styles.contactTitle}>Personal information</Text>
+            </View>
+            {!!data.email && (
+              <View style={styles.contactRow}>
+                <Icon name="mail-outline" size={16} color={colors.muted} />
+                <Text style={styles.contactText}>{data.email}</Text>
+              </View>
+            )}
+            {!!data.phone && (
+              <View style={styles.contactRow}>
+                <Icon name="call-outline" size={16} color={colors.muted} />
+                <Text style={styles.contactText}>{data.phone}</Text>
+              </View>
+            )}
+          </View>
+        )}
+
         <View style={styles.stats}>
           <View style={styles.stat}><Text style={styles.statNum}>{data.counts?.posts ?? 0}</Text><Text style={styles.statLabel}>Posts</Text></View>
           <View style={styles.statDivider} />
@@ -123,7 +150,7 @@ export default function UserProfile() {
           <View style={styles.private}>
             <Icon name="lock-closed" size={28} color={colors.muted} />
             <Text style={styles.privateTitle}>This account is private</Text>
-            <Text style={styles.privateSub}>Become friends to see their posts.</Text>
+            <Text style={styles.privateSub}>{data.privacy === "only_me" ? "Only this user can see their posts." : "Become friends to see their posts."}</Text>
           </View>
         )}
         {data.can_view && <Text style={styles.postsHeader}>Posts</Text>}
@@ -142,6 +169,12 @@ export default function UserProfile() {
         contentContainerStyle={{ paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={data.can_view ? <View style={styles.emptyPosts}><Text style={styles.emptyText}>No posts yet</Text></View> : null}
+      />
+      <ReportModal
+        visible={reportOpen}
+        onClose={() => setReportOpen(false)}
+        targetType="user"
+        targetId={data.id}
       />
     </View>
   );
@@ -168,6 +201,11 @@ const useStyles = makeStyles((c) => ({
   bio: { color: c.onSurfaceSecondary, fontFamily: fonts.text, fontSize: 15, lineHeight: 22, marginTop: spacing.md },
   locationRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.sm },
   location: { color: c.muted, fontFamily: fonts.text, fontSize: 14 },
+  contactCard: { marginTop: spacing.md, backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.md, gap: spacing.sm },
+  contactTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  contactTitle: { color: c.onSurface, fontFamily: fonts.semibold, fontSize: 14 },
+  contactRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  contactText: { color: c.onSurfaceSecondary, fontFamily: fonts.text, fontSize: 14 },
   stats: { flexDirection: "row", alignItems: "center", gap: spacing.xl, marginTop: spacing.lg },
   stat: {}, statNum: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 22 },
   statLabel: { color: c.muted, fontFamily: fonts.text, fontSize: 13 },

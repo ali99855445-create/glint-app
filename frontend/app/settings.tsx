@@ -33,15 +33,25 @@ export default function Settings() {
   const qc = useQueryClient();
   const { user, refresh, logout } = useAuth();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [privacyPicker, setPrivacyPicker] = useState<"profile" | "contact" | null>(null);
 
   const me = useQuery({ queryKey: ["me-settings"], queryFn: () => api.get("/users/me") });
   useFocusEffect(React.useCallback(() => { me.refetch(); }, []));
 
   const privacy = me.data?.privacy || "public";
+  const contactVisibility = me.data?.contact_visibility || "only_me";
 
-  const togglePrivacy = useMutation({
-    mutationFn: () => api.put("/users/me", { privacy: privacy === "public" ? "friends" : "public" }),
-    onSuccess: async () => { await refresh(); me.refetch(); toast.show("Privacy updated", "success"); },
+  const visibilityLabel = (value: string) => value === "public" ? "Public" : value === "friends" ? "Friends Only" : "Only Me";
+
+  const updateVisibility = useMutation({
+    mutationFn: ({ field, value }: { field: "privacy" | "contact_visibility"; value: string }) => api.put("/users/me", { [field]: value }),
+    onSuccess: async () => {
+      await refresh();
+      await me.refetch();
+      setPrivacyPicker(null);
+      toast.show("Privacy updated", "success");
+    },
+    onError: (e: any) => toast.show(e.message || "Could not update privacy", "error"),
   });
 
   const deleteAcct = useMutation({
@@ -69,12 +79,21 @@ export default function Settings() {
           <Row icon="bookmark-outline" label="Saved posts" onPress={() => router.push("/saved")} testID="settings-saved" />
           <Row icon="star-outline" label="Inner Circle" onPress={() => router.push("/inner-circle")} testID="settings-inner-circle" />
           <Row
-            icon={privacy === "public" ? "earth-outline" : "people-outline"}
+            icon={privacy === "public" ? "earth-outline" : privacy === "friends" ? "people-outline" : "lock-closed-outline"}
             label="Profile privacy"
             testID="settings-privacy"
-            onPress={() => togglePrivacy.mutate()}
+            onPress={() => setPrivacyPicker("profile")}
             rightEl={
-              <View style={styles.pill}><Text style={styles.pillText}>{privacy === "public" ? "Public" : "Friends Only"}</Text></View>
+              <View style={styles.pill}><Text style={styles.pillText}>{visibilityLabel(privacy)}</Text></View>
+            }
+          />
+          <Row
+            icon={contactVisibility === "public" ? "earth-outline" : contactVisibility === "friends" ? "people-outline" : "lock-closed-outline"}
+            label="Personal info (email & phone)"
+            testID="settings-contact-privacy"
+            onPress={() => setPrivacyPicker("contact")}
+            rightEl={
+              <View style={styles.pill}><Text style={styles.pillText}>{visibilityLabel(contactVisibility)}</Text></View>
             }
           />
           <Row icon="ban-outline" label="Blocked users" onPress={() => router.push("/blocked")} testID="settings-blocked" />
@@ -99,8 +118,47 @@ export default function Settings() {
           <Row icon="trash-outline" label="Delete account" danger onPress={() => setConfirmDelete(true)} testID="settings-delete" />
         </View>
 
-        <Text style={styles.version}>Glint v1.0.8 · @{user?.username}</Text>
+        <Text style={styles.version}>Glint v1.0.9 · @{user?.username}</Text>
       </ScrollView>
+
+      <Modal visible={!!privacyPicker} transparent animationType="fade" onRequestClose={() => setPrivacyPicker(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.privacyCard}>
+            <Text style={styles.modalTitle}>{privacyPicker === "contact" ? "Personal information privacy" : "Profile privacy"}</Text>
+            <Text style={styles.modalText}>
+              {privacyPicker === "contact"
+                ? "Choose who can see your email address and phone number."
+                : "Choose who can see your profile posts."}
+            </Text>
+            {[
+              { value: "public", label: "Public", icon: "earth-outline", sub: "Anyone on Glint" },
+              { value: "friends", label: "Friends Only", icon: "people-outline", sub: "Only your friends" },
+              { value: "only_me", label: "Only Me", icon: "lock-closed-outline", sub: "Private to you" },
+            ].map((opt) => {
+              const current = privacyPicker === "contact" ? contactVisibility : privacy;
+              return (
+                <Pressable
+                  key={opt.value}
+                  style={[styles.privacyOption, current === opt.value && styles.privacyOptionSelected]}
+                  onPress={() => updateVisibility.mutate({
+                    field: privacyPicker === "contact" ? "contact_visibility" : "privacy",
+                    value: opt.value,
+                  })}
+                  testID={`privacy-${privacyPicker}-${opt.value}`}
+                >
+                  <View style={styles.privacyOptionIcon}><Icon name={opt.icon as any} size={19} color={colors.brand} /></View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.privacyOptionTitle}>{opt.label}</Text>
+                    <Text style={styles.privacyOptionSub}>{opt.sub}</Text>
+                  </View>
+                  {current === opt.value && <Icon name="checkmark-circle" size={22} color={colors.brand} />}
+                </Pressable>
+              );
+            })}
+            <Pressable onPress={() => setPrivacyPicker(null)}><Text style={styles.cancel}>Cancel</Text></Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={confirmDelete} transparent animationType="fade" onRequestClose={() => setConfirmDelete(false)}>
         <View style={styles.modalOverlay}>
@@ -136,6 +194,12 @@ const useStyles = makeStyles((c) => ({
   version: { color: c.muted, fontFamily: fonts.text, fontSize: 12, textAlign: "center", marginTop: spacing.md },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center", padding: spacing.xl },
   modalCard: { backgroundColor: c.surface, borderRadius: radius.lg, padding: spacing.xl, gap: spacing.md, alignItems: "center", width: "100%" },
+  privacyCard: { backgroundColor: c.surface, borderRadius: radius.lg, padding: spacing.xl, gap: spacing.md, width: "100%" },
+  privacyOption: { flexDirection: "row", alignItems: "center", gap: spacing.md, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.md, backgroundColor: c.surfaceSecondary },
+  privacyOptionSelected: { borderColor: c.brand, backgroundColor: c.brandTertiary },
+  privacyOptionIcon: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: c.brandTertiary },
+  privacyOptionTitle: { color: c.onSurface, fontFamily: fonts.semibold, fontSize: 15 },
+  privacyOptionSub: { color: c.muted, fontFamily: fonts.text, fontSize: 12, marginTop: 2 },
   modalIcon: { width: 60, height: 60, borderRadius: 30, backgroundColor: c.error + "22", alignItems: "center", justifyContent: "center" },
   modalTitle: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 20 },
   modalText: { color: c.muted, fontFamily: fonts.text, fontSize: 14, textAlign: "center", lineHeight: 21 },

@@ -438,9 +438,12 @@ async def can_view_post(post: dict, author: dict, viewer_id: str, friend_ids: se
     aud = post.get("audience", "public")
     if author["id"] == viewer_id:
         return True
+    profile_privacy = author.get("privacy", "public")
+    if profile_privacy == "only_me":
+        return False
     if aud == "inner":
         return viewer_id in author.get("inner_circle", [])
-    if aud == "friends" or author.get("privacy") == "friends":
+    if aud == "friends" or profile_privacy == "friends":
         return post["author_id"] in friend_ids
     return True
 
@@ -486,6 +489,7 @@ class ProfileUpdate(BaseModel):
     avatar: Optional[str] = None
     cover: Optional[str] = None
     privacy: Optional[str] = None
+    contact_visibility: Optional[str] = None
 
 
 class PostCreate(BaseModel):
@@ -650,6 +654,7 @@ async def register_init(body: RegisterInit):
         "otp_attempts": 0,
         "otp_purpose": "signup",
         "privacy": "public",
+        "contact_visibility": "only_me",
         "suspended": False,
         "deleted_at": None,
         "created_at": now_iso(),
@@ -821,6 +826,7 @@ async def get_me(me=Depends(get_current_user)):
         "email": me.get("email"),
         "phone": me.get("phone"),
         "phone_verified": bool(me.get("phone_verified")) or bool(me.get("phone") and not me.get("email") and me.get("verified")),
+        "contact_visibility": me.get("contact_visibility", "only_me"),
         "is_admin": bool(me.get("email")) and any(
             me.get("email", "").strip().lower() == admin_email.strip().lower()
             for admin_email, _ in ADMIN_CREDS if admin_email
@@ -836,6 +842,10 @@ async def get_me(me=Depends(get_current_user)):
 async def update_me(body: ProfileUpdate, me=Depends(get_current_user)):
     # Fields explicitly sent as null should be cleared; omitted fields stay unchanged.
     update = {k: v for k, v in body.dict(exclude_unset=True).items()}
+    if "privacy" in update and update["privacy"] not in {"public", "friends", "only_me"}:
+        raise HTTPException(400, "Invalid profile privacy")
+    if "contact_visibility" in update and update["contact_visibility"] not in {"public", "friends", "only_me"}:
+        raise HTTPException(400, "Invalid personal information visibility")
     if update:
         await db.users.update_one({"id": me["id"]}, {"$set": update})
     fresh = await db.users.find_one({"id": me["id"]}, {"_id": 0})
@@ -889,8 +899,15 @@ async def get_user(username: str, me=Depends(get_current_user)):
     data["is_me"] = u["id"] == me["id"]
     data["is_blocked"] = u["id"] in set(me.get("blocked", []))
     data["is_inner"] = u["id"] in me.get("inner_circle", [])
-    can_view = (u.get("privacy") != "friends") or friend or data["is_me"]
+    profile_privacy = u.get("privacy", "public")
+    can_view = data["is_me"] or profile_privacy == "public" or (profile_privacy == "friends" and friend)
     data["can_view"] = can_view
+    contact_visibility = u.get("contact_visibility", "only_me")
+    data["contact_visibility"] = contact_visibility
+    can_view_contact = data["is_me"] or contact_visibility == "public" or (contact_visibility == "friends" and friend)
+    if can_view_contact:
+        data["email"] = u.get("email")
+        data["phone"] = u.get("phone")
     data["counts"] = {
         "friends": await db.friendships.count_documents({"users": u["id"]}),
         "posts": await db.posts.count_documents({"author_id": u["id"], "deleted_at": None}),
@@ -1300,9 +1317,44 @@ async def delete_comment(comment_id: str, me=Depends(get_current_user)):
 
 @api.post("/report")
 async def report(body: ReportBody, me=Depends(get_current_user)):
+    target_type = body.target_type.strip().lower()
+    reason = body.reason.strip()
+    allowed_types = {"user", "post", "story", "comment"}
+    if target_type not in allowed_types:
+        raise HTTPException(400, "Unsupported report type")
+    if not reason:
+        raise HTTPException(400, "Select a report reason")
+
+    target = None
+    if target_type == "user":
+        target = await db.users.find_one({"id": body.target_id, "deleted_at": None})
+        if target and target.get("id") == me["id"]:
+            raise HTTPException(400, "You cannot report your own account")
+    elif target_type == "post":
+        target = await db.posts.find_one({"id": body.target_id, "deleted_at": None})
+        if target and target.get("author_id") == me["id"]:
+            raise HTTPException(400, "You cannot report your own post")
+    elif target_type == "story":
+        target = await db.stories.find_one({"id": body.target_id, "deleted_at": None})
+        if target and target.get("author_id") == me["id"]:
+            raise HTTPException(400, "You cannot report your own story")
+    else:
+        target = await db.comments.find_one({"id": body.target_id, "deleted_at": None})
+        if target and target.get("author_id") == me["id"]:
+            raise HTTPException(400, "You cannot report your own comment")
+    if not target:
+        raise HTTPException(404, "Reported item not found")
+
+    duplicate = await db.reports.find_one({
+        "reporter_id": me["id"], "target_type": target_type, "target_id": body.target_id,
+        "reason": reason, "status": "open",
+    })
+    if duplicate:
+        return {"ok": True, "duplicate": True}
+
     await db.reports.insert_one({
-        "id": new_id(), "reporter_id": me["id"], "target_type": body.target_type,
-        "target_id": body.target_id, "reason": body.reason, "status": "open",
+        "id": new_id(), "reporter_id": me["id"], "target_type": target_type,
+        "target_id": body.target_id, "reason": reason, "status": "open",
         "created_at": now_iso(),
     })
     return {"ok": True}
@@ -1976,6 +2028,10 @@ async def admin_reports(_=Depends(require_admin)):
             s = await db.stories.find_one({"id": r["target_id"]}, {"_id": 0})
             if s:
                 target = {"type": "story", "text": s.get("text"), "image": s.get("image")}
+        elif r["target_type"] == "user":
+            u = await db.users.find_one({"id": r["target_id"]}, {"_id": 0})
+            if u:
+                target = {"type": "user", "full_name": u.get("full_name"), "username": u.get("username"), "avatar": u.get("avatar")}
         r["target"] = target
         out.append(r)
     return out
@@ -2001,7 +2057,10 @@ async def delete_reported(report_id: str, body: AdminReasonBody = AdminReasonBod
         target = await db.comments.find_one({"id": r["target_id"]})
         author_id = target.get("author_id") if target else None
         await db.comments.update_one({"id": r["target_id"]}, {"$set": {"deleted_at": ts, "moderation_reason": reason, "moderated_by": "admin"}})
-    if author_id:
+    elif r["target_type"] == "user":
+        author_id = r["target_id"]
+        await admin_permanent_remove_user(r["target_id"], reason)
+    if author_id and r["target_type"] != "user":
         await admin_notify(author_id, f"Your {r['target_type']} was removed by Glint. Reason: {reason}", r["target_id"])
     await db.reports.update_one({"id": report_id}, {"$set": {"status": "resolved", "resolution_reason": reason, "resolved_at": ts}})
     await admin_audit("delete_reported_content", r["target_type"], r["target_id"], reason, author_id, {"report_id": report_id})
