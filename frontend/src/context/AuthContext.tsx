@@ -14,6 +14,7 @@ export type User = {
   email?: string | null;
   phone?: string | null;
   is_admin?: boolean;
+  contact_visibility?: string;
   counts?: { saved: number; friends: number; posts: number };
 };
 
