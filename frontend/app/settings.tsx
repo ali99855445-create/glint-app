@@ -75,6 +75,20 @@ export default function Settings() {
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl, gap: spacing.xl }}>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
+          <View style={styles.contactSummary}>
+            <Text style={styles.contactSummaryTitle}>Account contact</Text>
+            <View style={styles.contactLine}>
+              <Icon name="mail-outline" size={17} color={colors.brand} />
+              <Text style={styles.contactLabel}>Email</Text>
+              <Text style={styles.contactValue}>{me.data?.email || "Not linked"}</Text>
+            </View>
+            <View style={styles.contactLine}>
+              <Icon name="call-outline" size={17} color={colors.brand} />
+              <Text style={styles.contactLabel}>Phone</Text>
+              <Text style={styles.contactValue}>{me.data?.phone || "Not linked"}</Text>
+            </View>
+            <Text style={styles.contactHint}>You can log in with your username, linked email, or linked phone number.</Text>
+          </View>
           <Row icon="person-outline" label="Edit profile" onPress={() => router.push("/edit-profile")} testID="settings-edit-profile" />
           <Row icon="bookmark-outline" label="Saved posts" onPress={() => router.push("/saved")} testID="settings-saved" />
           <Row icon="star-outline" label="Inner Circle" onPress={() => router.push("/inner-circle")} testID="settings-inner-circle" />
@@ -118,7 +132,7 @@ export default function Settings() {
           <Row icon="trash-outline" label="Delete account" danger onPress={() => setConfirmDelete(true)} testID="settings-delete" />
         </View>
 
-        <Text style={styles.version}>Glint v1.0.9 · @{user?.username}</Text>
+        <Text style={styles.version}>Glint v1.0.10 · @{user?.username}</Text>
       </ScrollView>
 
       <Modal visible={!!privacyPicker} transparent animationType="fade" onRequestClose={() => setPrivacyPicker(null)}>
@@ -182,6 +196,12 @@ const useStyles = makeStyles((c) => ({
   title: { color: c.onSurface, fontFamily: fonts.display, fontSize: 18 },
   section: { gap: spacing.xs },
   sectionTitle: { color: c.muted, fontFamily: fonts.semibold, fontSize: 13, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: spacing.xs },
+  contactSummary: { backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.md, gap: spacing.sm, marginBottom: spacing.xs },
+  contactSummaryTitle: { color: c.onSurface, fontFamily: fonts.semibold, fontSize: 15 },
+  contactLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  contactLabel: { width: 52, color: c.muted, fontFamily: fonts.medium, fontSize: 13 },
+  contactValue: { flex: 1, color: c.onSurface, fontFamily: fonts.medium, fontSize: 14, textAlign: "right" },
+  contactHint: { color: c.muted, fontFamily: fonts.text, fontSize: 12, lineHeight: 17, marginTop: 2 },
   row: { flexDirection: "row", alignItems: "center", gap: spacing.md, backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.md },
   rowIcon: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
   rowLabel: { flex: 1, color: c.onSurface, fontFamily: fonts.medium, fontSize: 15 },
