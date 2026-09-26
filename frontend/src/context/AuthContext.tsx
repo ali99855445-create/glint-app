@@ -13,6 +13,7 @@ export type User = {
   privacy: string;
   email?: string | null;
   phone?: string | null;
+  is_admin?: boolean;
   counts?: { saved: number; friends: number; posts: number };
 };
 
