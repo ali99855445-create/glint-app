@@ -38,6 +38,9 @@ ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@glinttest.com")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 ADMIN_EMAIL_2 = os.environ.get("ADMIN_EMAIL_2", "").strip()
 ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "").strip()
+ACCOUNT_MIGRATION_USERNAME = os.environ.get("ACCOUNT_MIGRATION_USERNAME", "").strip().lower()
+ACCOUNT_MIGRATION_EMAIL = os.environ.get("ACCOUNT_MIGRATION_EMAIL", "").strip().lower()
+ACCOUNT_MIGRATION_ID = os.environ.get("ACCOUNT_MIGRATION_ID", "contact-v1").strip() or "contact-v1"
 ADMIN_CREDS = [
     (ADMIN_EMAIL, ADMIN_PASSWORD),
     (ADMIN_EMAIL_2, os.environ.get("ADMIN_PASSWORD_2", "")),
@@ -759,9 +762,13 @@ async def login(body: LoginBody):
     contact = body.contact.strip().lower()
     if contact.startswith("+"):
         contact = normalize_phone(contact)
-    u = await db.users.find_one({
-        "$or": [{"email": contact}, {"phone": contact}, {"username": contact}],
-    })
+    u = await db.users.find_one(
+        {
+            "$or": [{"email": contact}, {"phone": contact}, {"username": contact}],
+            "deleted_at": None,
+        },
+        sort=[("verified", -1), ("created_at", -1)],
+    )
     if not u or not verify_pw(body.password, u["password"]):
         raise HTTPException(400, "Invalid credentials")
     if u.get("deleted_at"):
@@ -2392,6 +2399,42 @@ async def startup():
         await db.users.create_index("username")
         await db.users.create_index("email")
         logger.info("MongoDB connection ready")
+
+        if ACCOUNT_MIGRATION_USERNAME and ACCOUNT_MIGRATION_EMAIL:
+            target = await db.users.find_one({
+                "username": ACCOUNT_MIGRATION_USERNAME,
+                "deleted_at": None,
+            })
+            if not target:
+                logger.error("Account contact migration skipped: target username not found")
+            elif ACCOUNT_MIGRATION_ID in target.get("contact_migrations", []):
+                logger.info("Account contact migration already applied")
+            else:
+                conflict = await db.users.find_one({
+                    "email": ACCOUNT_MIGRATION_EMAIL,
+                    "verified": True,
+                    "deleted_at": None,
+                    "id": {"$ne": target["id"]},
+                })
+                if conflict:
+                    logger.error("Account contact migration skipped: email already belongs to another verified account")
+                else:
+                    await db.users.delete_many({
+                        "email": ACCOUNT_MIGRATION_EMAIL,
+                        "verified": False,
+                        "id": {"$ne": target["id"]},
+                    })
+                    await db.users.update_one(
+                        {"id": target["id"]},
+                        {
+                            "$set": {
+                                "email": ACCOUNT_MIGRATION_EMAIL,
+                                "verified": True,
+                            },
+                            "$addToSet": {"contact_migrations": ACCOUNT_MIGRATION_ID},
+                        },
+                    )
+                    logger.info("Account contact migration applied")
     except Exception as e:
         logger.error(f"MongoDB startup check failed: {e}")
 
