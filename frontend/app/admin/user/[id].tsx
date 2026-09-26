@@ -232,6 +232,8 @@ export default function AdminUserDetail() {
           <MiniStat label="Comments" value={data.counts?.comments} />
           <MiniStat label="Stories" value={data.counts?.stories} />
           <MiniStat label="Friends" value={data.counts?.friends} />
+          <MiniStat label="Followers" value={data.counts?.followers} />
+          <MiniStat label="Following" value={data.counts?.following} />
           <MiniStat label="Messages sent" value={data.counts?.messages_sent} />
           <MiniStat label="Warnings" value={data.counts?.warnings} />
           <MiniStat label="Tickets" value={data.counts?.tickets} />
