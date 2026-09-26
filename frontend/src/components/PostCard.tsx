@@ -11,6 +11,7 @@ import { Icon } from "@/src/components/Icon";
 import { useToast } from "@/src/components/Toast";
 import { useAuth } from "@/src/context/AuthContext";
 import { timeAgo } from "@/src/lib/time";
+import { ReportModal } from "@/src/components/ReportModal";
 
 export type Post = any;
 
@@ -36,6 +37,7 @@ export function PostCard({ post, onChanged }: { post: Post; onChanged?: () => vo
   const qc = useQueryClient();
   const [showPicker, setShowPicker] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const [local, setLocal] = useState(post);
 
   const invalidate = () => {
@@ -91,12 +93,6 @@ export function PostCard({ post, onChanged }: { post: Post; onChanged?: () => vo
     } catch {}
   }
 
-  async function report() {
-    setMenuOpen(false);
-    await api.post("/report", { target_type: "post", target_id: local.id, reason: "Inappropriate content" });
-    toast.show("Reported. Thank you.", "success");
-  }
-
   const myReactionObj = REACTIONS.find((r) => r.key === local.my_reaction);
 
   return (
@@ -134,7 +130,7 @@ export function PostCard({ post, onChanged }: { post: Post; onChanged?: () => vo
             </Pressable>
           )}
           {!local.is_mine && (
-            <Pressable style={styles.menuItem} onPress={report} testID={`post-report-${local.id}`}>
+            <Pressable style={styles.menuItem} onPress={() => { setMenuOpen(false); setReportOpen(true); }} testID={`post-report-${local.id}`}>
               <Icon name="flag-outline" size={18} color={colors.error} />
               <Text style={[styles.menuText, { color: colors.error }]}>Report</Text>
             </Pressable>
@@ -231,6 +227,13 @@ export function PostCard({ post, onChanged }: { post: Post; onChanged?: () => vo
           <Icon name={local.saved ? "bookmark" : "bookmark-outline"} size={21} color={local.saved ? colors.brandSecondary : colors.onSurfaceTertiary} />
         </Pressable>
       </View>
+
+      <ReportModal
+        visible={reportOpen}
+        onClose={() => setReportOpen(false)}
+        targetType="post"
+        targetId={local.id}
+      />
     </View>
   );
 }
