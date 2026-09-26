@@ -2,7 +2,7 @@
   "expo": {
     "name": "Glint",
     "slug": "glint-app",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "glint",
@@ -19,7 +19,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#E7F7EC"
+        "backgroundColor": "#FFFFFF"
       },
       "package": "com.glinttechnologies.glint",
       "permissions": [
@@ -29,7 +29,7 @@
         "READ_EXTERNAL_STORAGE",
         "CAMERA"
       ],
-      "versionCode": 7
+      "versionCode": 8
     },
     "web": {
       "bundler": "metro",
