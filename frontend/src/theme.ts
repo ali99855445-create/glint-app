@@ -3,7 +3,7 @@ import { StyleSheet, useColorScheme } from "react-native";
 
 export type ColorScheme = "light" | "dark";
 
-// Glint: clean white theme with soft green accents.
+// Glint: clean white theme with balanced medium-green accents.
 const glint = {
   surface: "#FFFFFF",
   onSurface: "#111827",
@@ -14,13 +14,13 @@ const glint = {
   surfaceInverse: "#111827",
   onSurfaceInverse: "#FFFFFF",
   muted: "#6B7280",
-  brand: "#67C587",
+  brand: "#45A866",
   onBrand: "#12331D",
-  brandPrimary: "#8BD5A4",
+  brandPrimary: "#4CAF70",
   onBrandPrimary: "#12331D",
-  brandSecondary: "#5ABC7A",
+  brandSecondary: "#3E9E5F",
   onBrandSecondary: "#12331D",
-  brandTertiary: "#E7F7EC",
+  brandTertiary: "#EAF5ED",
   onBrandTertiary: "#25633A",
   success: "#22A35A",
   onSuccess: "#FFFFFF",
@@ -66,7 +66,7 @@ export const STORY_BG_COLORS = [
   "#EC4899", "#F97316", "#1A1A1A", "#059669", "#DB2777",
 ];
 
-// Theme is locked to Glint's white + soft-green visual system.
+// Theme is locked to Glint's white + balanced green visual system.
 export function useTheme(): { scheme: ColorScheme; colors: ThemeColors } {
   return { scheme: "light", colors: glint };
 }

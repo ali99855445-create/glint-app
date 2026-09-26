@@ -821,6 +821,10 @@ async def get_me(me=Depends(get_current_user)):
         "email": me.get("email"),
         "phone": me.get("phone"),
         "phone_verified": bool(me.get("phone_verified")) or bool(me.get("phone") and not me.get("email") and me.get("verified")),
+        "is_admin": bool(me.get("email")) and any(
+            me.get("email", "").strip().lower() == admin_email.strip().lower()
+            for admin_email, _ in ADMIN_CREDS if admin_email
+        ),
         "sparks": me.get("sparks", 0),
         "inner_circle_count": len(me.get("inner_circle", [])),
         "counts": {"saved": saved, "friends": friends, "posts": posts},

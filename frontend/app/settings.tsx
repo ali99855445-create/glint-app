@@ -84,7 +84,7 @@ export default function Settings() {
           <Text style={styles.sectionTitle}>Glint</Text>
           <Row icon="ribbon-outline" label="Get verified (Blue Tick)" onPress={() => router.push("/verification")} testID="settings-verification" />
           <Row icon="help-buoy-outline" label="Help Center" onPress={() => router.push("/help")} testID="settings-help" />
-          <Row icon="shield-checkmark-outline" label="Admin panel" onPress={() => router.push("/admin/login")} testID="settings-admin" />
+          {(me.data?.is_admin || user?.is_admin) && <Row icon="shield-checkmark-outline" label="Admin panel" onPress={() => router.push("/admin/login")} testID="settings-admin" />}
         </View>
 
         <View style={styles.section}>
@@ -99,7 +99,7 @@ export default function Settings() {
           <Row icon="trash-outline" label="Delete account" danger onPress={() => setConfirmDelete(true)} testID="settings-delete" />
         </View>
 
-        <Text style={styles.version}>Glint v1.0.0 · @{user?.username}</Text>
+        <Text style={styles.version}>Glint v1.0.8 · @{user?.username}</Text>
       </ScrollView>
 
       <Modal visible={confirmDelete} transparent animationType="fade" onRequestClose={() => setConfirmDelete(false)}>
