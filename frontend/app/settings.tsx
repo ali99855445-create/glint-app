@@ -146,7 +146,7 @@ export default function Settings() {
                   })}
                   testID={`privacy-${privacyPicker}-${opt.value}`}
                 >
-                  <View style={styles.privacyOptionIcon}><Icon name={opt.icon} size={19} color={colors.brand} /></View>
+                  <View style={styles.privacyOptionIcon}><Icon name={opt.icon as any} size={19} color={colors.brand} /></View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.privacyOptionTitle}>{opt.label}</Text>
                     <Text style={styles.privacyOptionSub}>{opt.sub}</Text>
