@@ -2557,6 +2557,135 @@ async def request_account_deletion(
     )
 
 
+def _delete_data_html(message: str = "", success: bool = False) -> str:
+    status = ""
+    if message:
+        cls = "success" if success else "error"
+        status = f'<div class="{cls}">{message}</div>'
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Request Deletion of Glint Data</title>
+  <style>
+    *{{box-sizing:border-box}}
+    body{{font-family:Arial,sans-serif;background:#f7faf8;color:#142018;margin:0}}
+    main{{max-width:780px;margin:0 auto;padding:28px 16px 56px}}
+    .card{{background:#fff;border:1px solid #e4ece7;border-radius:18px;padding:26px;box-shadow:0 8px 30px rgba(0,0,0,.04)}}
+    h1{{margin:0 0 8px;color:#168a4a}} h2{{margin-top:28px;color:#163c28}}
+    p,li{{line-height:1.65}} .muted{{color:#68756c;font-size:14px}}
+    label{{display:block;font-weight:700;margin:15px 0 6px}}
+    input,textarea,select{{width:100%;padding:12px;border:1px solid #cfd9d2;border-radius:10px;font:inherit}}
+    textarea{{min-height:90px;resize:vertical}}
+    button{{margin-top:18px;background:#168a4a;color:#fff;border:0;border-radius:10px;padding:12px 18px;font-weight:700;font-size:16px;cursor:pointer}}
+    .notice{{background:#f1f7f3;border-radius:12px;padding:14px;margin:18px 0}}
+    .success{{background:#eaf8ef;color:#155c31;border:1px solid #bfe4cb;border-radius:10px;padding:12px;margin:16px 0}}
+    .error{{background:#fff1f1;color:#8a1f1f;border:1px solid #efc2c2;border-radius:10px;padding:12px;margin:16px 0}}
+  </style>
+</head>
+<body><main><div class="card">
+  <h1>Request Deletion of Glint Data</h1>
+  <p class="muted">Glint Technologies · Delete specific data without deleting your account</p>
+
+  <p>Glint users can delete certain content, such as their own posts, comments, and stories, directly inside the app. If you cannot access the relevant control, or want to request deletion of other account-linked data while keeping your Glint account active, use the form below.</p>
+
+  <div class="notice">
+    This form is for deleting specific data while keeping your Glint account. To delete your entire account, use the Glint account deletion page instead.
+  </div>
+
+  {status}
+
+  <form method="post" action="/delete-data">
+    <label for="contact">Email address or phone number used on Glint</label>
+    <input id="contact" name="contact" type="text" maxlength="160" required>
+
+    <label for="username">Glint username (optional)</label>
+    <input id="username" name="username" type="text" maxlength="80">
+
+    <label for="data_type">What data do you want deleted?</label>
+    <select id="data_type" name="data_type" required>
+      <option value="">Select one</option>
+      <option value="posts">Posts</option>
+      <option value="comments">Comments</option>
+      <option value="stories">Stories</option>
+      <option value="profile">Profile information</option>
+      <option value="other">Other account data</option>
+    </select>
+
+    <label for="details">Details to identify the data (optional)</label>
+    <textarea id="details" name="details" maxlength="700" placeholder="For example: post date, description, or other identifying details"></textarea>
+
+    <button type="submit">Request data deletion</button>
+  </form>
+
+  <h2>What happens next</h2>
+  <p>We may ask you to verify account ownership before processing the request. Deleting specific data through this page does not require deleting your Glint account.</p>
+
+  <h2>Data we may retain</h2>
+  <p>Limited records may be retained when necessary for security, fraud prevention, dispute resolution, enforcement of Glint rules, or legal obligations. Information retained for these purposes is kept only for as long as reasonably necessary.</p>
+</div></main></body></html>"""
+
+
+@app.get("/delete-data", response_class=HTMLResponse)
+async def delete_data_page():
+    return HTMLResponse(_delete_data_html())
+
+
+@app.post("/delete-data", response_class=HTMLResponse)
+async def request_data_deletion(
+    contact: str = Form(...),
+    username: str = Form(""),
+    data_type: str = Form(...),
+    details: str = Form(""),
+):
+    contact = (contact or "").strip()
+    username = (username or "").strip()
+    data_type = (data_type or "").strip()
+    details = (details or "").strip()
+
+    allowed_types = {"posts", "comments", "stories", "profile", "other"}
+    if (
+        not contact
+        or data_type not in allowed_types
+        or len(contact) > 160
+        or len(username) > 80
+        or len(details) > 700
+    ):
+        return HTMLResponse(
+            _delete_data_html("Please check the information you entered and try again.", False),
+            status_code=400,
+        )
+
+    request_id = new_id()
+    await db.data_deletion_requests.insert_one({
+        "id": request_id,
+        "contact": contact,
+        "username": username or None,
+        "data_type": data_type,
+        "details": details or None,
+        "status": "pending",
+        "created_at": now_iso(),
+    })
+
+    note = (
+        f"Glint data deletion request\n"
+        f"Request ID: {request_id}\n"
+        f"Contact: {contact}\n"
+        f"Username: {username or 'Not provided'}\n"
+        f"Data type: {data_type}\n"
+        f"Details: {details or 'Not provided'}"
+    )
+    await send_moderation_email(ADMIN_EMAIL, "Glint data deletion request", note)
+
+    return HTMLResponse(
+        _delete_data_html(
+            "Your data deletion request has been received. Keep your account contact available in case ownership verification is required.",
+            True,
+        )
+    )
+
+
 app.include_router(api)
 
 app.add_middleware(
