@@ -25,7 +25,7 @@ export default function AdminDashboard() {
   const [tab, setTab] = useState("Tickets");
   const [replyModal, setReplyModal] = useState<{ id: string } | null>(null);
   const [replyText, setReplyText] = useState("");
-  const [reportDeleteModal, setReportDeleteModal] = useState<{ id: string } | null>(null);
+  const [reportDeleteModal, setReportDeleteModal] = useState<{ id: string; target_type: string } | null>(null);
   const [moderationReason, setModerationReason] = useState("");
   const [broadcastMsg, setBroadcastMsg] = useState("");
   const [broadcastActive, setBroadcastActive] = useState(true);
@@ -51,7 +51,7 @@ export default function AdminDashboard() {
   });
   const approveV = useMutation({ mutationFn: (id: string) => api.post(`/admin/verifications/${id}/approve`, {}, true), onSuccess: () => { toast.show("Approved — Blue Tick granted", "success"); verifications.refetch(); stats.refetch(); } });
   const rejectV = useMutation({ mutationFn: (id: string) => api.post(`/admin/verifications/${id}/reject`, {}, true), onSuccess: () => { toast.show("Rejected", "info"); verifications.refetch(); } });
-  const delContent = useMutation({ mutationFn: () => api.post(`/admin/reports/${reportDeleteModal!.id}/delete-content`, { reason: moderationReason.trim() }, true), onSuccess: () => { toast.show("Content removed", "success"); setReportDeleteModal(null); setModerationReason(""); reports.refetch(); stats.refetch(); qc.invalidateQueries({ queryKey: ["admin-audit"] }); } });
+  const delContent = useMutation({ mutationFn: () => api.post(`/admin/reports/${reportDeleteModal!.id}/delete-content`, { reason: moderationReason.trim() }, true), onSuccess: () => { toast.show(reportDeleteModal?.target_type === "user" ? "Account removed" : "Content removed", "success"); setReportDeleteModal(null); setModerationReason(""); reports.refetch(); stats.refetch(); qc.invalidateQueries({ queryKey: ["admin-audit"] }); } });
   const dismissReport = useMutation({ mutationFn: (id: string) => api.post(`/admin/reports/${id}/dismiss`, {}, true), onSuccess: () => { reports.refetch(); stats.refetch(); } });
   const sendBroadcast = useMutation({ mutationFn: () => api.post("/admin/broadcast", { message: broadcastMsg, active: broadcastActive }, true), onSuccess: () => toast.show("Broadcast sent to all users", "success") });
   const setForce = useMutation({ mutationFn: (active: boolean) => api.post("/admin/force-update", { active, message: "A new version of Glint is available. Please update." }, true), onSuccess: () => toast.show("Force update setting saved", "success") });
@@ -150,9 +150,18 @@ export default function AdminDashboard() {
                   <Text style={styles.cardTitle}>Reported {r.target_type}</Text>
                   <Text style={styles.cardDesc}>Reason: {r.reason}</Text>
                   {r.target?.text ? <Text style={styles.quoted}>&quot;{r.target.text}&quot;</Text> : null}
+                  {r.target?.type === "user" && (
+                    <View style={styles.userRow}>
+                      <Avatar uri={r.target.avatar} name={r.target.full_name} size={40} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.cardTitle}>{r.target.full_name || "Reported user"}</Text>
+                        <Text style={styles.cardMeta}>@{r.target.username}</Text>
+                      </View>
+                    </View>
+                  )}
                   {r.target?.image && <Image source={{ uri: fileUrl(r.target.image) }} style={styles.attachImg} contentFit="cover" />}
                   <View style={styles.actionRow}>
-                    <Button title="Delete content" small variant="danger" onPress={() => { setReportDeleteModal({ id: r.id }); setModerationReason(""); }} testID={`admin-delcontent-${r.id}`} style={{ flex: 1 }} />
+                    <Button title={r.target_type === "user" ? "Remove account" : "Delete content"} small variant="danger" onPress={() => { setReportDeleteModal({ id: r.id, target_type: r.target_type }); setModerationReason(""); }} testID={`admin-delcontent-${r.id}`} style={{ flex: 1 }} />
                     <Button title="Dismiss" small variant="secondary" onPress={() => dismissReport.mutate(r.id)} testID={`admin-dismiss-${r.id}`} style={{ flex: 1 }} />
                   </View>
                 </View>
@@ -237,10 +246,10 @@ export default function AdminDashboard() {
       <Modal visible={!!reportDeleteModal} transparent animationType="fade" onRequestClose={() => setReportDeleteModal(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Delete reported content</Text>
-            <Text style={styles.cardMeta}>Write the reason. The content owner will be told this reason and the action will be saved in Audit.</Text>
-            <TextInput value={moderationReason} onChangeText={setModerationReason} placeholder="Reason for deletion..." placeholderTextColor={colors.muted} style={styles.textArea} multiline testID="admin-report-delete-reason" />
-            <Button title="Delete content" variant="danger" onPress={() => moderationReason.trim() && delContent.mutate()} loading={delContent.isPending} disabled={!moderationReason.trim()} testID="admin-report-delete-confirm" />
+            <Text style={styles.modalTitle}>{reportDeleteModal?.target_type === "user" ? "Remove reported account" : "Delete reported content"}</Text>
+            <Text style={styles.cardMeta}>Write the reason. The affected user will be told this reason and the action will be saved in Audit.</Text>
+            <TextInput value={moderationReason} onChangeText={setModerationReason} placeholder={reportDeleteModal?.target_type === "user" ? "Reason for removing account..." : "Reason for deletion..."} placeholderTextColor={colors.muted} style={styles.textArea} multiline testID="admin-report-delete-reason" />
+            <Button title={reportDeleteModal?.target_type === "user" ? "Remove account" : "Delete content"} variant="danger" onPress={() => moderationReason.trim() && delContent.mutate()} loading={delContent.isPending} disabled={!moderationReason.trim()} testID="admin-report-delete-confirm" />
             <Pressable onPress={() => setReportDeleteModal(null)}><Text style={styles.cancel}>Cancel</Text></Pressable>
           </View>
         </View>
