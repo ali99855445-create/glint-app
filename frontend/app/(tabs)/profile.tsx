@@ -81,24 +81,35 @@ export default function ProfileTab() {
             <Text style={styles.statLabel}>Posts</Text>
           </View>
           <View style={styles.statDivider} />
-          <View style={styles.stat}>
-            <Text style={styles.statNum}>{data?.counts?.friends ?? 0}</Text>
-            <Text style={styles.statLabel}>Friends</Text>
-          </View>
+          <Pressable
+            style={styles.stat}
+            onPress={() => data?.id && router.push(`/follows?mode=followers&userId=${data.id}&username=${encodeURIComponent(data.username || "")}`)}
+            testID="profile-followers"
+          >
+            <Text style={styles.statNum}>{data?.counts?.followers ?? 0}</Text>
+            <Text style={styles.statLabel}>Followers</Text>
+          </Pressable>
           <View style={styles.statDivider} />
-          <Pressable style={styles.stat} onPress={() => router.push("/inner-circle")} testID="profile-sparks">
-            <Text style={[styles.statNum, { color: colors.brandSecondary }]}>🪙 {user?.sparks ?? 0}</Text>
-            <Text style={styles.statLabel}>Sparks</Text>
+          <Pressable
+            style={styles.stat}
+            onPress={() => data?.id && router.push(`/follows?mode=following&userId=${data.id}&username=${encodeURIComponent(data.username || "")}`)}
+            testID="profile-following"
+          >
+            <Text style={styles.statNum}>{data?.counts?.following ?? 0}</Text>
+            <Text style={styles.statLabel}>Following</Text>
           </Pressable>
         </View>
 
-        {!data?.verified && (
-          <Pressable style={styles.verifyPrompt} onPress={() => router.push("/verification")} testID="profile-get-verified">
-            <BlueTick size={18} />
-            <Text style={styles.verifyText}>Get the Blue Tick — request verification</Text>
-            <Icon name="chevron-forward" size={18} color={colors.brand} />
+        <View style={styles.secondaryStats}>
+          <View style={styles.secondaryStat}>
+            <Text style={styles.secondaryNum}>{data?.counts?.friends ?? 0}</Text>
+            <Text style={styles.statLabel}>Friends</Text>
+          </View>
+          <Pressable style={styles.secondaryStat} onPress={() => router.push("/inner-circle")} testID="profile-sparks">
+            <Text style={[styles.secondaryNum, { color: colors.brandSecondary }]}>🪙 {user?.sparks ?? 0}</Text>
+            <Text style={styles.statLabel}>Sparks</Text>
           </Pressable>
-        )}
+        </View>
 
         <Text style={styles.postsHeader}>Posts</Text>
       </View>
@@ -150,13 +161,14 @@ const useStyles = makeStyles((c) => ({
   bio: { color: c.onSurfaceSecondary, fontFamily: fonts.text, fontSize: 15, lineHeight: 22, marginTop: spacing.md },
   locationRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.sm },
   location: { color: c.muted, fontFamily: fonts.text, fontSize: 14 },
-  stats: { flexDirection: "row", alignItems: "center", gap: spacing.xl, marginTop: spacing.lg },
-  stat: { alignItems: "flex-start" },
+  stats: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.lg },
+  stat: { flex: 1, alignItems: "center" },
   statNum: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 22 },
   statLabel: { color: c.muted, fontFamily: fonts.text, fontSize: 13 },
   statDivider: { width: 1, height: 30, backgroundColor: c.border },
-  verifyPrompt: { flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: c.brandTertiary, borderRadius: radius.md, padding: spacing.md, marginTop: spacing.lg },
-  verifyText: { flex: 1, color: c.onBrandTertiary, fontFamily: fonts.medium, fontSize: 14 },
+  secondaryStats: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md },
+  secondaryStat: { flex: 1, alignItems: "center", backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingVertical: spacing.sm },
+  secondaryNum: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 17 },
   postsHeader: { color: c.onSurface, fontFamily: fonts.display, fontSize: 18, marginTop: spacing.xl, marginBottom: spacing.md },
   emptyPosts: { alignItems: "center", gap: spacing.sm, paddingVertical: spacing.xl },
   emptyText: { color: c.muted, fontFamily: fonts.text, fontSize: 15 },
