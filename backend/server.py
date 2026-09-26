@@ -2435,7 +2435,7 @@ async def privacy_policy():
   <p>Glint uses reasonable technical and organizational safeguards designed to protect user information. No online service can guarantee absolute security.</p>
 
   <h2>7. Children</h2>
-  <p>Glint is not intended for children under 13. Where local law requires a higher minimum age, users must meet that requirement.</p>
+  <p>Glint is intended for adults aged 18 and over. Users under 18 are not permitted to create or use a Glint account.</p>
 
   <h2>8. Changes to this policy</h2>
   <p>We may update this Privacy Policy as Glint changes. The effective date at the top of this page will be updated when material changes are made.</p>
@@ -2443,6 +2443,118 @@ async def privacy_policy():
   <h2>9. Contact</h2>
   <p>For privacy questions or requests, use the Help Center inside Glint. If you cannot access your account, use the support contact shown on Glint's Google Play listing.</p>
 </div></main></body></html>""")
+
+
+def _delete_account_html(message: str = "", success: bool = False) -> str:
+    status = ""
+    if message:
+        cls = "success" if success else "error"
+        status = f'<div class="{cls}">{message}</div>'
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Delete Your Glint Account</title>
+  <style>
+    *{{box-sizing:border-box}}
+    body{{font-family:Arial,sans-serif;background:#f7faf8;color:#142018;margin:0}}
+    main{{max-width:780px;margin:0 auto;padding:28px 16px 56px}}
+    .card{{background:#fff;border:1px solid #e4ece7;border-radius:18px;padding:26px;box-shadow:0 8px 30px rgba(0,0,0,.04)}}
+    h1{{margin:0 0 8px;color:#168a4a}} h2{{margin-top:28px;color:#163c28}}
+    p,li{{line-height:1.65}} .muted{{color:#68756c;font-size:14px}}
+    label{{display:block;font-weight:700;margin:15px 0 6px}}
+    input,textarea{{width:100%;padding:12px;border:1px solid #cfd9d2;border-radius:10px;font:inherit}}
+    textarea{{min-height:90px;resize:vertical}}
+    button{{margin-top:18px;background:#168a4a;color:#fff;border:0;border-radius:10px;padding:12px 18px;font-weight:700;font-size:16px;cursor:pointer}}
+    .notice{{background:#f1f7f3;border-radius:12px;padding:14px;margin:18px 0}}
+    .success{{background:#eaf8ef;color:#155c31;border:1px solid #bfe4cb;border-radius:10px;padding:12px;margin:16px 0}}
+    .error{{background:#fff1f1;color:#8a1f1f;border:1px solid #efc2c2;border-radius:10px;padding:12px;margin:16px 0}}
+    a{{color:#168a4a}}
+  </style>
+</head>
+<body><main><div class="card">
+  <h1>Delete Your Glint Account</h1>
+  <p class="muted">Glint Technologies · Account and data deletion</p>
+
+  <p>You can delete your Glint account directly in the app. Open <strong>Glint → Settings → Account → Delete account</strong> and follow the confirmation steps.</p>
+
+  <div class="notice">
+    <strong>Can't access the app?</strong> Submit the request below. We may contact you to verify that you own the account before processing the deletion.
+  </div>
+
+  {status}
+
+  <form method="post" action="/delete-account">
+    <label for="contact">Email address or phone number used on Glint</label>
+    <input id="contact" name="contact" type="text" maxlength="160" required autocomplete="email">
+
+    <label for="username">Glint username (optional)</label>
+    <input id="username" name="username" type="text" maxlength="80">
+
+    <label for="reason">Reason or additional information (optional)</label>
+    <textarea id="reason" name="reason" maxlength="500"></textarea>
+
+    <button type="submit">Request account deletion</button>
+  </form>
+
+  <h2>What is deleted</h2>
+  <p>After a verified deletion request is processed, your Glint account is disabled and your active profile, posts, and stories are removed from the service. Other account-linked content is removed or restricted where technically and legally appropriate.</p>
+
+  <h2>Data we may retain</h2>
+  <p>Limited records may be retained when necessary for security, fraud prevention, dispute resolution, enforcement of Glint rules, or legal obligations. Information retained for these purposes is kept only for as long as reasonably necessary.</p>
+
+  <h2>Need help?</h2>
+  <p>If you can still sign in, the in-app deletion option is the fastest method. You can also use Glint's Help Center for account support.</p>
+</div></main></body></html>"""
+
+
+@app.get("/delete-account", response_class=HTMLResponse)
+async def delete_account_page():
+    return HTMLResponse(_delete_account_html())
+
+
+@app.post("/delete-account", response_class=HTMLResponse)
+async def request_account_deletion(
+    contact: str = Form(...),
+    username: str = Form(""),
+    reason: str = Form(""),
+):
+    contact = (contact or "").strip()
+    username = (username or "").strip()
+    reason = (reason or "").strip()
+
+    if not contact or len(contact) > 160 or len(username) > 80 or len(reason) > 500:
+        return HTMLResponse(
+            _delete_account_html("Please check the information you entered and try again.", False),
+            status_code=400,
+        )
+
+    request_id = new_id()
+    await db.account_deletion_requests.insert_one({
+        "id": request_id,
+        "contact": contact,
+        "username": username or None,
+        "reason": reason or None,
+        "status": "pending",
+        "created_at": now_iso(),
+    })
+
+    note = (
+        f"Glint account deletion request\n"
+        f"Request ID: {request_id}\n"
+        f"Contact: {contact}\n"
+        f"Username: {username or 'Not provided'}\n"
+        f"Reason: {reason or 'Not provided'}"
+    )
+    await send_moderation_email(ADMIN_EMAIL, "Glint account deletion request", note)
+
+    return HTMLResponse(
+        _delete_account_html(
+            "Your deletion request has been received. Keep your account contact available in case ownership verification is required.",
+            True,
+        )
+    )
 
 
 app.include_router(api)
