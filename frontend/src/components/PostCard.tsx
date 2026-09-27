@@ -12,6 +12,7 @@ import { useToast } from "@/src/components/Toast";
 import { useAuth } from "@/src/context/AuthContext";
 import { timeAgo } from "@/src/lib/time";
 import { ReportModal } from "@/src/components/ReportModal";
+import { postShareUrl } from "@/src/lib/shareLinks";
 
 export type Post = any;
 
@@ -89,7 +90,12 @@ export function PostCard({ post, onChanged }: { post: Post; onChanged?: () => vo
 
   async function sharePost() {
     try {
-      await Share.share({ message: `Check out this post by @${local.author.username} on Glint! glint.app/${local.author.username}` });
+      const link = postShareUrl(local.id);
+      await Share.share({
+        title: "Share Glint post",
+        message: `Check out this post by @${local.author.username} on Glint:\n${link}`,
+        url: link,
+      });
     } catch {}
   }
 
