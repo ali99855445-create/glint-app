@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { View, Text, FlatList, Pressable, ActivityIndicator } from "react-native";
+import { View, Text, FlatList, Pressable, ActivityIndicator, Share } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -13,6 +13,7 @@ import { PostCard } from "@/src/components/PostCard";
 import { Button } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
 import { ReportModal } from "@/src/components/ReportModal";
+import { profileShareUrl } from "@/src/lib/shareLinks";
 
 const DEFAULT_COVER = "https://images.unsplash.com/photo-1511081692775-05d0f180a065?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHwxfHxhZXN0aGV0aWMlMjBjYWZlJTIwaW50ZXJpb3J8ZW58MHx8fHwxNzkwMjcxMjM2fDA&ixlib=rb-4.1.0&q=85";
 
@@ -50,6 +51,19 @@ export default function UserProfile() {
     onSuccess: () => { toast.show(data.is_inner ? "Removed from Inner Circle" : "Added to Inner Circle ⭐", "success"); setMenu(false); refetch(); },
     onError: (e: any) => { toast.show(e.message, "error"); setMenu(false); },
   });
+
+  async function shareProfile() {
+    if (!data?.username) return;
+    const link = profileShareUrl(data.username);
+    try {
+      await Share.share({
+        title: "Share Glint profile",
+        message: `View @${data.username} on Glint:\n${link}`,
+        url: link,
+      });
+    } catch {}
+    setMenu(false);
+  }
 
   if (profile.isLoading || !data) {
     return <View style={[styles.root, styles.center]}><ActivityIndicator color={colors.brandPrimary} size="large" /></View>;
@@ -94,6 +108,10 @@ export default function UserProfile() {
                 <Text style={[styles.menuText, { color: colors.brandSecondary }]}>{data.is_inner ? "Remove from Inner Circle" : "Add to Inner Circle"}</Text>
               </Pressable>
             )}
+            <Pressable style={styles.menuItem} onPress={shareProfile} testID="user-share-profile">
+              <Icon name="share-social-outline" size={18} color={colors.onSurface} />
+              <Text style={[styles.menuText, { color: colors.onSurface }]}>Share profile</Text>
+            </Pressable>
             <Pressable style={styles.menuItem} onPress={() => { setMenu(false); setReportOpen(true); }} testID="user-report">
               <Icon name="flag-outline" size={18} color={colors.error} />
               <Text style={[styles.menuText, { color: colors.error }]}>Report account</Text>
