@@ -2,7 +2,7 @@
   "expo": {
     "name": "Glint",
     "slug": "glint-app",
-    "version": "1.0.12",
+    "version": "1.0.13",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "glint",
@@ -29,7 +29,39 @@
         "READ_EXTERNAL_STORAGE",
         "CAMERA"
       ],
-      "versionCode": 12
+      "versionCode": 13,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "glint-api-xf2i.onrender.com",
+              "pathPrefix": "/share/profile/"
+            },
+            {
+              "scheme": "https",
+              "host": "glint-api-xf2i.onrender.com",
+              "pathPrefix": "/share/post/"
+            },
+            {
+              "scheme": "https",
+              "host": "glint-api-xf2i.onrender.com",
+              "pathPrefix": "/share/story/"
+            },
+            {
+              "scheme": "https",
+              "host": "glint-api-xf2i.onrender.com",
+              "pathPrefix": "/share/app"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -57,7 +89,8 @@
       "typedRoutes": true
     },
     "extra": {
-      "productionApiUrl": "https://glint-api-xf2i.onrender.com"
+      "productionApiUrl": "https://glint-api-xf2i.onrender.com",
+      "publicShareBaseUrl": "https://glint-api-xf2i.onrender.com"
     }
   }
 }
