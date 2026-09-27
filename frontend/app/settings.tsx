@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, Modal } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Modal, Share } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -9,6 +9,7 @@ import { Button } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
 import { useAuth } from "@/src/context/AuthContext";
 import { api } from "@/src/api/client";
+import { appShareUrl } from "@/src/lib/shareLinks";
 
 function Row({ icon, label, value, onPress, danger, testID, rightEl }: any) {
   const styles = useStyles();
@@ -64,6 +65,17 @@ export default function Settings() {
     router.replace("/(auth)/welcome");
   }
 
+  async function shareGlint() {
+    const link = appShareUrl();
+    try {
+      await Share.share({
+        title: "Share Glint",
+        message: `Join me on Glint:\n${link}`,
+        url: link,
+      });
+    } catch {}
+  }
+
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <View style={styles.header}>
@@ -116,6 +128,7 @@ export default function Settings() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Glint</Text>
           <Row icon="ribbon-outline" label="Get verified (Blue Tick)" onPress={() => router.push("/verification")} testID="settings-verification" />
+          <Row icon="share-social-outline" label="Share Glint" onPress={shareGlint} testID="settings-share-app" />
           <Row icon="help-buoy-outline" label="Help Center" onPress={() => router.push("/help")} testID="settings-help" />
           {(me.data?.is_admin || user?.is_admin) && <Row icon="shield-checkmark-outline" label="Admin panel" onPress={() => router.push("/admin/login")} testID="settings-admin" />}
         </View>
