@@ -8,6 +8,7 @@ import json
 import urllib.request
 import urllib.error
 import urllib.parse
+import html
 import base64
 from email.message import EmailMessage
 from pathlib import Path
@@ -1414,6 +1415,17 @@ async def get_post(post_id: str, me=Depends(get_current_user)):
     p = await db.posts.find_one({"id": post_id, "deleted_at": None})
     if not p:
         raise HTTPException(404, "Post not found")
+    author = await db.users.find_one({"id": p["author_id"], "deleted_at": None}, {"_id": 0})
+    if not author:
+        raise HTTPException(404, "Post not found")
+    if p["author_id"] in me.get("blocked", []) or me["id"] in author.get("blocked", []):
+        raise HTTPException(403, "You cannot view this post")
+    friend_ids = {me["id"]}
+    async for friendship in db.friendships.find({"users": me["id"]}):
+        for uid in friendship.get("users", []):
+            friend_ids.add(uid)
+    if not await can_view_post(p, author, me["id"], friend_ids):
+        raise HTTPException(403, "This post is not available to you")
     return await serialize_post(p, me["id"])
 
 
@@ -2936,6 +2948,117 @@ async def set_force_update(body: ForceUpdateBody, _=Depends(require_admin)):
 @api.get("/")
 async def root():
     return {"message": "Glint API"}
+
+
+PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.glinttechnologies.glint"
+
+
+def _share_landing_html(title: str, description: str, deep_link: str) -> str:
+    safe_title = html.escape(title)
+    safe_description = html.escape(description)
+    safe_deep_link = html.escape(deep_link, quote=True)
+    safe_play_url = html.escape(PLAY_STORE_URL, quote=True)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#67C587" />
+  <meta property="og:site_name" content="Glint" />
+  <meta property="og:title" content="{safe_title}" />
+  <meta property="og:description" content="{safe_description}" />
+  <meta name="twitter:card" content="summary" />
+  <title>{safe_title}</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+      background: #f6fbf8; color: #14211a; padding: 24px;
+    }}
+    .card {{
+      width: min(440px,100%); background: white; border: 1px solid #dce9e1;
+      border-radius: 24px; padding: 28px; box-shadow: 0 18px 45px rgba(30,70,48,.10);
+      text-align: center;
+    }}
+    .logo {{
+      width: 72px; height: 72px; border-radius: 22px; margin: 0 auto 18px;
+      display: grid; place-items: center; background: #67C587; color: white;
+      font-size: 32px; font-weight: 800;
+    }}
+    h1 {{ font-size: 24px; margin: 0 0 10px; }}
+    p {{ color: #607168; line-height: 1.55; margin: 0 0 24px; }}
+    a.btn {{
+      display: block; text-decoration: none; border-radius: 999px; padding: 14px 18px;
+      font-weight: 700; margin-top: 10px;
+    }}
+    .primary {{ background: #49ad70; color: white; }}
+    .secondary {{ background: #eef7f1; color: #24653c; border: 1px solid #d2eadb; }}
+    small {{ display: block; color: #8a9890; margin-top: 18px; line-height: 1.4; }}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="logo">G</div>
+    <h1>{safe_title}</h1>
+    <p>{safe_description}</p>
+    <a class="btn primary" href="{safe_deep_link}">Open in Glint</a>
+    <a class="btn secondary" href="{safe_play_url}">Get Glint on Google Play</a>
+    <small>If Glint is installed, this link opens the exact shared content. Access to private posts and stories still follows the account's privacy settings.</small>
+  </main>
+  <script>
+    (function() {{
+      var deep = {json.dumps(deep_link)};
+      // Try to hand off to the installed app. Browsers that block automatic
+      // custom-scheme navigation still provide the Open in Glint button above.
+      setTimeout(function() {{
+        try {{ window.location.href = deep; }} catch (e) {{}}
+      }}, 120);
+    }})();
+  </script>
+</body>
+</html>"""
+
+
+@app.get("/share/profile/{username}", response_class=HTMLResponse)
+async def share_profile_page(username: str):
+    encoded = urllib.parse.quote(username, safe="")
+    return HTMLResponse(_share_landing_html(
+        "Open this Glint profile",
+        f"View @{username} on Glint.",
+        f"glint://share/profile/{encoded}",
+    ))
+
+
+@app.get("/share/post/{post_id}", response_class=HTMLResponse)
+async def share_post_page(post_id: str):
+    encoded = urllib.parse.quote(post_id, safe="")
+    return HTMLResponse(_share_landing_html(
+        "Open this Glint post",
+        "View the shared post in Glint.",
+        f"glint://share/post/{encoded}",
+    ))
+
+
+@app.get("/share/story/{user_id}", response_class=HTMLResponse)
+async def share_story_page(user_id: str, storyId: Optional[str] = Query(default=None)):
+    encoded_user = urllib.parse.quote(user_id, safe="")
+    story_q = urllib.parse.quote(storyId or "", safe="")
+    suffix = f"?storyId={story_q}" if story_q else ""
+    return HTMLResponse(_share_landing_html(
+        "Open this Glint story",
+        "View the shared story in Glint. Stories may expire after 24 hours.",
+        f"glint://share/story/{encoded_user}{suffix}",
+    ))
+
+
+@app.get("/share/app", response_class=HTMLResponse)
+async def share_app_page():
+    return HTMLResponse(_share_landing_html(
+        "Open Glint",
+        "Connect, share moments, message friends and discover your community.",
+        "glint://share/app",
+    ))
 
 
 @app.get("/privacy-policy", response_class=HTMLResponse)
