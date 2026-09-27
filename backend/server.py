@@ -2421,6 +2421,74 @@ async def messenger_admin_remove_group_message(group_id: str, message_id: str, b
     return {"ok": True}
 
 
+@api.get("/messenger/admin/users")
+async def messenger_admin_users(q: str = Query(""), admin=Depends(require_messenger_admin)):
+    return await admin_users(q, admin)
+
+
+@api.get("/messenger/admin/users/{user_id}")
+async def messenger_admin_user_detail(user_id: str, admin=Depends(require_messenger_admin)):
+    return await admin_user_full(user_id, admin)
+
+
+@api.post("/messenger/admin/users/{user_id}/warn")
+async def messenger_admin_warn_user(user_id: str, body: AdminWarningBody, admin=Depends(require_messenger_admin)):
+    return await admin_warn_user(user_id, body, admin)
+
+
+@api.post("/messenger/admin/users/{user_id}/restrictions")
+async def messenger_admin_restrict_user(user_id: str, body: AdminRestrictionBody, admin=Depends(require_messenger_admin)):
+    return await admin_restrict_user(user_id, body, admin)
+
+
+@api.post("/messenger/admin/users/{user_id}/suspend")
+async def messenger_admin_suspend_user(user_id: str, body: AdminSuspendBody, admin=Depends(require_messenger_admin)):
+    return await suspend_user(user_id, body, admin)
+
+
+@api.post("/messenger/admin/users/{user_id}/restore")
+async def messenger_admin_restore_user(user_id: str, body: AdminReasonBody, admin=Depends(require_messenger_admin)):
+    return await restore_user(user_id, body, admin)
+
+
+@api.post("/messenger/admin/users/{user_id}/blue-tick")
+async def messenger_admin_user_blue_tick(user_id: str, body: AdminBlueTickBody, admin=Depends(require_messenger_admin)):
+    return await admin_blue_tick(user_id, body, admin)
+
+
+@api.post("/messenger/admin/users/{user_id}/remove")
+async def messenger_admin_remove_user(user_id: str, body: AdminReasonBody, admin=Depends(require_messenger_admin)):
+    reason = (body.reason or "Account removed by Glint moderation").strip()
+    await admin_permanent_remove_user(user_id, reason)
+    await admin_audit("messenger_remove_user", "user", user_id, reason, user_id)
+    return {"ok": True}
+
+
+@api.get("/messenger/admin/reports")
+async def messenger_admin_reports(admin=Depends(require_messenger_admin)):
+    return await admin_reports(admin)
+
+
+@api.post("/messenger/admin/reports/{report_id}/remove")
+async def messenger_admin_remove_reported(report_id: str, body: AdminReasonBody, admin=Depends(require_messenger_admin)):
+    return await delete_reported(report_id, body, admin)
+
+
+@api.post("/messenger/admin/reports/{report_id}/dismiss")
+async def messenger_admin_dismiss_report(report_id: str, admin=Depends(require_messenger_admin)):
+    return await dismiss_report(report_id, admin)
+
+
+@api.get("/messenger/admin/audit")
+async def messenger_admin_audit(admin=Depends(require_messenger_admin)):
+    return await admin_audit_log(admin)
+
+
+@api.get("/messenger/admin/system")
+async def messenger_admin_system(admin=Depends(require_messenger_admin)):
+    return await admin_system(admin)
+
+
 @api.get("/messenger/admin/controls")
 async def messenger_admin_get_controls(admin=Depends(require_messenger_admin)):
     cfg = await db.config.find_one({"id": "app"}, {"_id": 0, "feature_flags": 1}) or {}
