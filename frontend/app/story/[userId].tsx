@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, Pressable, Animated, TextInput, StyleSheet, ActivityIndicator, Modal, ScrollView } from "react-native";
+import { View, Text, Pressable, Animated, TextInput, StyleSheet, ActivityIndicator, Modal, ScrollView, Share } from "react-native";
 import { Image } from "expo-image";
 import { useAudioPlayer } from "expo-audio";
 import { LinearGradient } from "expo-linear-gradient";
@@ -13,11 +13,12 @@ import { Icon } from "@/src/components/Icon";
 import { useToast } from "@/src/components/Toast";
 import { useAuth } from "@/src/context/AuthContext";
 import { timeAgo } from "@/src/lib/time";
+import { storyShareUrl } from "@/src/lib/shareLinks";
 
 const DURATION = 5000;
 
 export default function StoryViewer() {
-  const { userId } = useLocalSearchParams<{ userId: string }>();
+  const { userId, storyId } = useLocalSearchParams<{ userId: string; storyId?: string }>();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const toast = useToast();
@@ -28,10 +29,19 @@ export default function StoryViewer() {
   const [reply, setReply] = useState("");
   const [viewersOpen, setViewersOpen] = useState(false);
   const [viewers, setViewers] = useState<any[]>([]);
+  const appliedStoryLink = useRef(false);
 
   const groups = useQuery({ queryKey: ["stories"], queryFn: () => api.get("/stories/feed") });
   const group = (groups.data || []).find((g: any) => g.author.id === userId);
   const stories = group?.stories || [];
+
+  useEffect(() => {
+    if (appliedStoryLink.current || !storyId || stories.length === 0) return;
+    const linkedIndex = stories.findIndex((story: any) => story.id === storyId);
+    if (linkedIndex >= 0) setIndex(linkedIndex);
+    appliedStoryLink.current = true;
+  }, [storyId, stories]);
+
   const current = stories[index];
   const isVoiceCur = current?.type === "voice";
   const player = useAudioPlayer(isVoiceCur && current?.media ? fileUrl(current.media) : null);
@@ -89,6 +99,18 @@ export default function StoryViewer() {
     await api.del(`/stories/${current.id}`);
     toast.show("Story deleted", "success");
     close();
+  }
+
+  async function shareStory() {
+    if (!current?.id || !group?.author?.id) return;
+    const link = storyShareUrl(group.author.id, current.id);
+    try {
+      await Share.share({
+        title: "Share Glint story",
+        message: `View @${group.author.username}'s story on Glint:\n${link}`,
+        url: link,
+      });
+    } catch {}
   }
 
   if (groups.isLoading) {
@@ -153,6 +175,9 @@ export default function StoryViewer() {
           <UserName name={group.author.full_name} verified={group.author.verified} size={14} color="#FFFFFF" />
           <Text style={styles.time}>{timeAgo(current.created_at)}</Text>
         </View>
+        <Pressable onPress={shareStory} style={styles.headerBtn} testID="story-share">
+          <Icon name="share-social-outline" size={22} color="#FFFFFF" />
+        </Pressable>
         {group.is_mine && (
           <Pressable onPress={deleteStory} style={styles.headerBtn} testID="story-delete">
             <Icon name="trash-outline" size={22} color="#FFFFFF" />
