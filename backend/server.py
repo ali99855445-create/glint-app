@@ -443,6 +443,16 @@ async def require_admin(authorization: Optional[str] = Header(None)):
     return payload
 
 
+async def require_messenger_admin(me=Depends(get_current_user)):
+    email = (me.get("email") or "").strip().lower()
+    allowed_emails = {e.strip().lower() for e, _ in ADMIN_CREDS if e}
+    phone = "".join(ch for ch in str(me.get("phone") or "") if ch.isdigit())
+    allowed_phone = "".join(ch for ch in ADMIN_PHONE if ch.isdigit())
+    if (email and email in allowed_emails) or (phone and allowed_phone and phone == allowed_phone):
+        return me
+    raise HTTPException(403, "Messenger admin only")
+
+
 def public_user(u: dict) -> dict:
     if not u:
         return None
@@ -605,6 +615,28 @@ class GroupCreate(BaseModel):
     name: str
     member_ids: List[str]
     avatar: Optional[str] = None
+    description: Optional[str] = None
+
+
+class GroupSettingsBody(BaseModel):
+    name: Optional[str] = None
+    avatar: Optional[str] = None
+    description: Optional[str] = None
+
+
+class GroupVerificationApplyBody(BaseModel):
+    purpose: str
+    note: Optional[str] = None
+
+
+class MessengerAdminReasonBody(BaseModel):
+    reason: str = "Messenger moderation action"
+
+
+class MessengerAdminControlsBody(BaseModel):
+    group_creation_enabled: Optional[bool] = None
+    group_verification_enabled: Optional[bool] = None
+    group_messaging_enabled: Optional[bool] = None
 
 
 class VerificationSubmit(BaseModel):
@@ -1557,7 +1589,7 @@ async def delete_comment(comment_id: str, me=Depends(get_current_user)):
 async def report(body: ReportBody, me=Depends(get_current_user)):
     target_type = body.target_type.strip().lower()
     reason = body.reason.strip()
-    allowed_types = {"user", "post", "story", "comment"}
+    allowed_types = {"user", "post", "story", "comment", "group", "message"}
     if target_type not in allowed_types:
         raise HTTPException(400, "Unsupported report type")
     if not reason:
@@ -1576,10 +1608,22 @@ async def report(body: ReportBody, me=Depends(get_current_user)):
         target = await db.stories.find_one({"id": body.target_id, "deleted_at": None})
         if target and target.get("author_id") == me["id"]:
             raise HTTPException(400, "You cannot report your own story")
-    else:
+    elif target_type == "comment":
         target = await db.comments.find_one({"id": body.target_id, "deleted_at": None})
         if target and target.get("author_id") == me["id"]:
             raise HTTPException(400, "You cannot report your own comment")
+    elif target_type == "group":
+        target = await db.conversations.find_one({"id": body.target_id, "is_group": True})
+        if target and me["id"] not in target.get("participants", []):
+            raise HTTPException(403, "You can only report groups you belong to")
+    else:
+        target = await db.messages.find_one({"id": body.target_id, "is_group": True, "deleted_at": None})
+        if target and target.get("from_user") == me["id"]:
+            raise HTTPException(400, "You cannot report your own message")
+        if target:
+            group = await db.conversations.find_one({"id": target.get("conversation_id"), "is_group": True})
+            if not group or me["id"] not in group.get("participants", []):
+                raise HTTPException(403, "You can only report messages from your groups")
     if not target:
         raise HTTPException(404, "Reported item not found")
 
@@ -1843,6 +1887,8 @@ async def conversations(me=Depends(get_current_user)):
                 "verified": bool(c.get("verified", False)),
                 "verification_status": c.get("verification_status", "not_applied"),
                 "verification_badge": c.get("verification_badge"),
+                "disabled": bool(c.get("disabled", False)),
+                "disabled_reason": c.get("disabled_reason"),
                 "last_message": c.get("last_message"),
                 "last_type": c.get("last_type", "text"),
                 "updated_at": c.get("updated_at"),
@@ -1881,6 +1927,8 @@ async def conversations(me=Depends(get_current_user)):
 
 @api.post("/chat/groups")
 async def create_group(body: GroupCreate, me=Depends(get_current_user)):
+    if not await app_feature_enabled("group_creation_enabled", True):
+        raise HTTPException(503, "Group creation is temporarily unavailable.")
     if not body.name.strip():
         raise HTTPException(400, "Group name required")
     members = list({*body.member_ids, me["id"]})
@@ -1889,10 +1937,11 @@ async def create_group(body: GroupCreate, me=Depends(get_current_user)):
     gid = new_id()
     await db.conversations.insert_one({
         "id": gid, "is_group": True, "name": body.name.strip(), "avatar": body.avatar,
-        "participants": members, "created_by": me["id"], "muted_by": [],
-        # Reserved for the future Glint Messenger group Green Tick flow.
+        "description": (body.description or "").strip() or None,
+        "participants": members, "created_by": me["id"], "admins": [me["id"]], "muted_by": [],
         "verified": False, "verification_status": "not_applied",
         "verification_badge": None, "verified_at": None, "verified_by": None,
+        "disabled": False, "disabled_reason": None, "moderation_strikes": 0,
         "last_message": f"{me['full_name']} created the group", "last_type": "system",
         "updated_at": now_iso(), "created_at": now_iso(),
     })
@@ -1904,6 +1953,8 @@ async def get_group(group_id: str, me=Depends(get_current_user)):
     conv = await db.conversations.find_one({"id": group_id, "is_group": True})
     if not conv or me["id"] not in conv.get("participants", []):
         raise HTTPException(404, "Group not found")
+    if conv.get("disabled"):
+        raise HTTPException(403, f"Group disabled. Reason: {conv.get('disabled_reason') or 'Moderation action'}")
     await db.messages.update_many(
         {"conversation_id": group_id, "from_user": {"$ne": me["id"]}, "read_by": {"$ne": me["id"]}},
         {"$addToSet": {"read_by": me["id"]}})
@@ -1912,7 +1963,7 @@ async def get_group(group_id: str, me=Depends(get_current_user)):
         mu = await db.users.find_one({"id": uid}, {"_id": 0})
         if mu:
             members.append(public_user(mu))
-    cur = db.messages.find({"conversation_id": group_id}).sort("created_at", 1).limit(300)
+    cur = db.messages.find({"conversation_id": group_id, "deleted_at": None}).sort("created_at", 1).limit(300)
     msgs = []
     async for m in cur:
         sender = await db.users.find_one({"id": m["from_user"]}, {"_id": 0})
@@ -1926,6 +1977,7 @@ async def get_group(group_id: str, me=Depends(get_current_user)):
         })
     return {
         "id": group_id, "is_group": True, "name": conv.get("name"), "avatar": conv.get("avatar"),
+        "description": conv.get("description"), "created_by": conv.get("created_by"), "admins": conv.get("admins", []),
         "members": members, "member_count": len(members), "messages": msgs,
         "verified": bool(conv.get("verified", False)),
         "verification_status": conv.get("verification_status", "not_applied"),
@@ -1986,6 +2038,10 @@ async def send_message(body: MessageCreate, me=Depends(get_current_user)):
         if conv:
             if me["id"] not in conv.get("participants", []):
                 raise HTTPException(403, "Not a group member")
+            if conv.get("disabled"):
+                raise HTTPException(403, f"Group disabled. Reason: {conv.get('disabled_reason') or 'Moderation action'}")
+            if not await app_feature_enabled("group_messaging_enabled", True):
+                raise HTTPException(503, "Group messaging is temporarily unavailable.")
             msg = {
                 "id": new_id(), "conversation_id": conv["id"], "from_user": me["id"], "to_user": None,
                 "is_group": True, "type": body.type, "text": body.text, "media": body.media,
@@ -2049,6 +2105,344 @@ async def mute_chat(conversation_id: str, me=Depends(get_current_user)):
 async def heartbeat(me=Depends(get_current_user)):
     await db.users.update_one({"id": me["id"]}, {"$set": {"last_seen": now_iso()}})
     return {"ok": True}
+
+
+# ----------------------------- group settings + Green Tick -----------------------------
+@api.post("/chat/group/{group_id}/settings")
+async def update_group_settings(group_id: str, body: GroupSettingsBody, me=Depends(get_current_user)):
+    conv = await db.conversations.find_one({"id": group_id, "is_group": True})
+    if not conv:
+        raise HTTPException(404, "Group not found")
+    if me["id"] != conv.get("created_by") and me["id"] not in conv.get("admins", []):
+        raise HTTPException(403, "Group admin only")
+    updates = {}
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(400, "Group name required")
+        updates["name"] = name[:80]
+    if body.avatar is not None:
+        updates["avatar"] = body.avatar or None
+    if body.description is not None:
+        updates["description"] = body.description.strip()[:500] or None
+    if updates:
+        updates["updated_at"] = now_iso()
+        await db.conversations.update_one({"id": group_id}, {"$set": updates})
+    return {"ok": True}
+
+
+def _group_verification_requirements(conv: dict, owner: dict) -> list:
+    reasons = []
+    created = parse_iso_datetime(conv.get("created_at"))
+    if not created or (now_dt() - created).total_seconds() < 7 * 86400:
+        reasons.append("Group must be at least 7 days old")
+    if len(conv.get("participants", [])) < 10:
+        reasons.append("Group must have at least 10 members")
+    if not (conv.get("name") or "").strip():
+        reasons.append("Group name is required")
+    if not conv.get("avatar"):
+        reasons.append("Group photo is required")
+    if not (conv.get("description") or "").strip():
+        reasons.append("Group description is required")
+    if not owner or not owner.get("verified"):
+        reasons.append("Group owner must have a verified Glint account contact")
+    if owner and (owner.get("suspended") or owner.get("deleted_at")):
+        reasons.append("Group owner account must be in good standing")
+    if conv.get("disabled"):
+        reasons.append("Disabled groups cannot be verified")
+    if int(conv.get("moderation_strikes", 0) or 0) > 0:
+        reasons.append("Group has active moderation violations")
+    return reasons
+
+
+@api.get("/messenger/groups/{group_id}/verification")
+async def group_verification_status(group_id: str, me=Depends(get_current_user)):
+    conv = await db.conversations.find_one({"id": group_id, "is_group": True}, {"_id": 0})
+    if not conv or me["id"] not in conv.get("participants", []):
+        raise HTTPException(404, "Group not found")
+    owner = await db.users.find_one({"id": conv.get("created_by")}, {"_id": 0})
+    reasons = _group_verification_requirements(conv, owner)
+    latest = await db.group_verifications.find_one({"group_id": group_id}, {"_id": 0}, sort=[("created_at", -1)])
+    return {
+        "verified": bool(conv.get("verified")),
+        "status": conv.get("verification_status", "not_applied"),
+        "badge": conv.get("verification_badge"),
+        "eligible": len(reasons) == 0,
+        "requirements": {
+            "minimum_age_days": 7,
+            "minimum_members": 10,
+            "group_photo_required": True,
+            "description_required": True,
+            "owner_contact_verified": True,
+            "good_standing_required": True,
+        },
+        "unmet": reasons,
+        "application": latest,
+    }
+
+
+@api.post("/messenger/groups/{group_id}/verification/apply")
+async def apply_group_verification(group_id: str, body: GroupVerificationApplyBody, me=Depends(get_current_user)):
+    if not await app_feature_enabled("group_verification_enabled", True):
+        raise HTTPException(503, "Group verification applications are temporarily unavailable.")
+    conv = await db.conversations.find_one({"id": group_id, "is_group": True}, {"_id": 0})
+    if not conv:
+        raise HTTPException(404, "Group not found")
+    if me["id"] != conv.get("created_by"):
+        raise HTTPException(403, "Only the group owner can apply")
+    if conv.get("verified"):
+        return {"ok": True, "already_verified": True}
+    owner = await db.users.find_one({"id": me["id"]}, {"_id": 0})
+    reasons = _group_verification_requirements(conv, owner)
+    purpose = body.purpose.strip()
+    if len(purpose) < 10:
+        reasons.append("Explain the group's purpose in at least 10 characters")
+    if reasons:
+        raise HTTPException(400, {"message": "Group is not eligible yet", "unmet": reasons})
+    existing = await db.group_verifications.find_one({"group_id": group_id, "status": "pending"})
+    if existing:
+        return {"ok": True, "id": existing["id"], "duplicate": True}
+    doc = {
+        "id": new_id(), "group_id": group_id, "owner_id": me["id"],
+        "purpose": purpose[:1000], "note": (body.note or "").strip()[:1000] or None,
+        "status": "pending", "created_at": now_iso(), "reviewed_at": None,
+        "review_reason": None, "reviewed_by": None,
+    }
+    await db.group_verifications.insert_one(doc)
+    await db.conversations.update_one({"id": group_id}, {"$set": {"verification_status": "pending"}})
+    return {"ok": True, "id": doc["id"]}
+
+
+# ----------------------------- Messenger admin -----------------------------
+@api.get("/messenger/admin/stats")
+async def messenger_admin_stats(admin=Depends(require_messenger_admin)):
+    active_since = (now_dt() - timedelta(hours=24)).isoformat()
+    return {
+        "users": await db.users.count_documents({"deleted_at": None}),
+        "active_24h": await db.users.count_documents({"deleted_at": None, "last_seen": {"$gte": active_since}}),
+        "groups": await db.conversations.count_documents({"is_group": True}),
+        "disabled_groups": await db.conversations.count_documents({"is_group": True, "disabled": True}),
+        "verified_groups": await db.conversations.count_documents({"is_group": True, "verified": True}),
+        "pending_group_verifications": await db.group_verifications.count_documents({"status": "pending"}),
+        "group_messages": await db.messages.count_documents({"is_group": True, "deleted_at": None}),
+        "open_group_reports": await db.reports.count_documents({"status": "open", "target_type": {"$in": ["group", "message"]}}),
+    }
+
+
+@api.get("/messenger/admin/groups")
+async def messenger_admin_groups(q: str = Query(""), admin=Depends(require_messenger_admin)):
+    query = {"is_group": True}
+    if q.strip():
+        query["name"] = {"$regex": q.strip(), "$options": "i"}
+    cur = db.conversations.find(query, {"_id": 0}).sort("updated_at", -1).limit(200)
+    out = []
+    async for g in cur:
+        out.append({
+            "id": g.get("id"), "name": g.get("name"), "avatar": g.get("avatar"),
+            "description": g.get("description"), "created_by": g.get("created_by"),
+            "member_count": len(g.get("participants", [])), "verified": bool(g.get("verified")),
+            "verification_status": g.get("verification_status", "not_applied"),
+            "disabled": bool(g.get("disabled")), "disabled_reason": g.get("disabled_reason"),
+            "moderation_strikes": int(g.get("moderation_strikes", 0) or 0),
+            "created_at": g.get("created_at"), "updated_at": g.get("updated_at"),
+        })
+    return out
+
+
+@api.get("/messenger/admin/groups/{group_id}")
+async def messenger_admin_group_detail(group_id: str, admin=Depends(require_messenger_admin)):
+    g = await db.conversations.find_one({"id": group_id, "is_group": True}, {"_id": 0})
+    if not g:
+        raise HTTPException(404, "Group not found")
+    members = []
+    for uid in g.get("participants", []):
+        u = await db.users.find_one({"id": uid}, {"_id": 0})
+        if u:
+            members.append(admin_safe_user(u))
+    messages = []
+    cur = db.messages.find({"conversation_id": group_id}, {"_id": 0}).sort("created_at", -1).limit(100)
+    async for m in cur:
+        sender = await db.users.find_one({"id": m.get("from_user")}, {"_id": 0, "full_name": 1, "username": 1})
+        messages.append({
+            "id": m.get("id"), "from_user": m.get("from_user"),
+            "sender_name": (sender or {}).get("full_name"), "sender_username": (sender or {}).get("username"),
+            "type": m.get("type"), "text": m.get("text"), "media": m.get("media"),
+            "created_at": m.get("created_at"), "deleted_at": m.get("deleted_at"),
+            "moderation_reason": m.get("moderation_reason"),
+        })
+    return {**g, "member_count": len(members), "members": members, "messages": messages}
+
+
+@api.get("/messenger/admin/group-verifications")
+async def messenger_admin_verifications(admin=Depends(require_messenger_admin)):
+    cur = db.group_verifications.find({}, {"_id": 0}).sort("created_at", -1).limit(200)
+    out = []
+    async for item in cur:
+        g = await db.conversations.find_one({"id": item.get("group_id")}, {"_id": 0})
+        owner = await db.users.find_one({"id": item.get("owner_id")}, {"_id": 0})
+        item["group"] = {
+            "name": (g or {}).get("name"), "avatar": (g or {}).get("avatar"),
+            "member_count": len((g or {}).get("participants", [])),
+            "verified": bool((g or {}).get("verified")),
+        }
+        item["owner"] = public_user(owner) if owner else None
+        out.append(item)
+    return out
+
+
+@api.post("/messenger/admin/group-verifications/{application_id}/approve")
+async def messenger_admin_approve_verification(application_id: str, body: MessengerAdminReasonBody, admin=Depends(require_messenger_admin)):
+    appdoc = await db.group_verifications.find_one({"id": application_id})
+    if not appdoc:
+        raise HTTPException(404, "Application not found")
+    reason = (body.reason or "Green Tick approved").strip()
+    ts = now_iso()
+    await db.group_verifications.update_one({"id": application_id}, {"$set": {
+        "status": "approved", "reviewed_at": ts, "review_reason": reason, "reviewed_by": admin["id"]
+    }})
+    await db.conversations.update_one({"id": appdoc["group_id"]}, {"$set": {
+        "verified": True, "verification_status": "approved", "verification_badge": "green",
+        "verified_at": ts, "verified_by": admin["id"],
+    }})
+    await admin_notify(appdoc["owner_id"], f"Your group Green Tick was approved. Reason: {reason}", appdoc["group_id"])
+    await admin_audit("approve_group_green_tick", "group", appdoc["group_id"], reason, appdoc["owner_id"], {"application_id": application_id})
+    return {"ok": True}
+
+
+@api.post("/messenger/admin/group-verifications/{application_id}/reject")
+async def messenger_admin_reject_verification(application_id: str, body: MessengerAdminReasonBody, admin=Depends(require_messenger_admin)):
+    appdoc = await db.group_verifications.find_one({"id": application_id})
+    if not appdoc:
+        raise HTTPException(404, "Application not found")
+    reason = (body.reason or "Green Tick requirements not met").strip()
+    ts = now_iso()
+    await db.group_verifications.update_one({"id": application_id}, {"$set": {
+        "status": "rejected", "reviewed_at": ts, "review_reason": reason, "reviewed_by": admin["id"]
+    }})
+    await db.conversations.update_one({"id": appdoc["group_id"]}, {"$set": {"verification_status": "rejected"}})
+    await admin_notify(appdoc["owner_id"], f"Your group Green Tick application was declined. Reason: {reason}", appdoc["group_id"])
+    await admin_audit("reject_group_green_tick", "group", appdoc["group_id"], reason, appdoc["owner_id"], {"application_id": application_id})
+    return {"ok": True}
+
+
+@api.post("/messenger/admin/groups/{group_id}/green-tick/grant")
+async def messenger_admin_grant_tick(group_id: str, body: MessengerAdminReasonBody, admin=Depends(require_messenger_admin)):
+    g = await db.conversations.find_one({"id": group_id, "is_group": True})
+    if not g:
+        raise HTTPException(404, "Group not found")
+    reason = (body.reason or "Green Tick granted by admin").strip()
+    await db.conversations.update_one({"id": group_id}, {"$set": {
+        "verified": True, "verification_status": "approved", "verification_badge": "green",
+        "verified_at": now_iso(), "verified_by": admin["id"],
+    }})
+    if g.get("created_by"):
+        await admin_notify(g["created_by"], f"Your group received the Glint Messenger Green Tick. Reason: {reason}", group_id)
+    await admin_audit("grant_group_green_tick", "group", group_id, reason, g.get("created_by"))
+    return {"ok": True}
+
+
+@api.post("/messenger/admin/groups/{group_id}/green-tick/remove")
+async def messenger_admin_remove_tick(group_id: str, body: MessengerAdminReasonBody, admin=Depends(require_messenger_admin)):
+    g = await db.conversations.find_one({"id": group_id, "is_group": True})
+    if not g:
+        raise HTTPException(404, "Group not found")
+    reason = (body.reason or "Green Tick removed by admin").strip()
+    await db.conversations.update_one({"id": group_id}, {"$set": {
+        "verified": False, "verification_status": "revoked", "verification_badge": None,
+        "verified_at": None, "verified_by": None,
+    }})
+    if g.get("created_by"):
+        await admin_notify(g["created_by"], f"Your group Green Tick was removed. Reason: {reason}", group_id)
+    await admin_audit("remove_group_green_tick", "group", group_id, reason, g.get("created_by"))
+    return {"ok": True}
+
+
+@api.post("/messenger/admin/groups/{group_id}/disable")
+async def messenger_admin_disable_group(group_id: str, body: MessengerAdminReasonBody, admin=Depends(require_messenger_admin)):
+    g = await db.conversations.find_one({"id": group_id, "is_group": True})
+    if not g:
+        raise HTTPException(404, "Group not found")
+    reason = (body.reason or "Group disabled by Glint moderation").strip()
+    await db.conversations.update_one({"id": group_id}, {"$set": {
+        "disabled": True, "disabled_reason": reason, "verified": False,
+        "verification_status": "revoked" if g.get("verified") else g.get("verification_status", "not_applied"),
+        "verification_badge": None,
+    }, "$inc": {"moderation_strikes": 1}})
+    if g.get("created_by"):
+        await admin_notify(g["created_by"], f"Your group was disabled. Reason: {reason}", group_id)
+    await admin_audit("disable_group", "group", group_id, reason, g.get("created_by"))
+    return {"ok": True}
+
+
+@api.post("/messenger/admin/groups/{group_id}/restore")
+async def messenger_admin_restore_group(group_id: str, body: MessengerAdminReasonBody, admin=Depends(require_messenger_admin)):
+    g = await db.conversations.find_one({"id": group_id, "is_group": True})
+    if not g:
+        raise HTTPException(404, "Group not found")
+    reason = (body.reason or "Group restored by admin").strip()
+    await db.conversations.update_one({"id": group_id}, {"$set": {"disabled": False, "disabled_reason": None}})
+    if g.get("created_by"):
+        await admin_notify(g["created_by"], f"Your group was restored. {reason}", group_id)
+    await admin_audit("restore_group", "group", group_id, reason, g.get("created_by"))
+    return {"ok": True}
+
+
+@api.post("/messenger/admin/groups/{group_id}/members/{user_id}/remove")
+async def messenger_admin_remove_group_member(group_id: str, user_id: str, body: MessengerAdminReasonBody, admin=Depends(require_messenger_admin)):
+    g = await db.conversations.find_one({"id": group_id, "is_group": True})
+    if not g:
+        raise HTTPException(404, "Group not found")
+    if user_id == g.get("created_by"):
+        raise HTTPException(400, "The group owner cannot be removed. Disable the group instead.")
+    if user_id not in g.get("participants", []):
+        raise HTTPException(404, "Member not found")
+    reason = (body.reason or "Member removed by Glint moderation").strip()
+    await db.conversations.update_one({"id": group_id}, {
+        "$pull": {"participants": user_id, "admins": user_id}, "$set": {"updated_at": now_iso()}
+    })
+    await admin_notify(user_id, f"You were removed from a Messenger group by Glint moderation. Reason: {reason}", group_id)
+    await admin_audit("remove_group_member", "group", group_id, reason, user_id)
+    return {"ok": True}
+
+
+@api.post("/messenger/admin/groups/{group_id}/messages/{message_id}/remove")
+async def messenger_admin_remove_group_message(group_id: str, message_id: str, body: MessengerAdminReasonBody, admin=Depends(require_messenger_admin)):
+    m = await db.messages.find_one({"id": message_id, "conversation_id": group_id, "is_group": True})
+    if not m:
+        raise HTTPException(404, "Message not found")
+    reason = (body.reason or "Message removed by Glint moderation").strip()
+    ts = now_iso()
+    await db.messages.update_one({"id": message_id}, {"$set": {
+        "deleted_at": ts, "moderation_reason": reason, "moderated_by": admin["id"]
+    }})
+    await db.conversations.update_one({"id": group_id}, {"$inc": {"moderation_strikes": 1}})
+    await admin_notify(m["from_user"], f"Your group message was removed by Glint. Reason: {reason}", group_id)
+    await admin_audit("remove_group_message", "message", message_id, reason, m.get("from_user"), {"group_id": group_id})
+    return {"ok": True}
+
+
+@api.get("/messenger/admin/controls")
+async def messenger_admin_get_controls(admin=Depends(require_messenger_admin)):
+    cfg = await db.config.find_one({"id": "app"}, {"_id": 0, "feature_flags": 1}) or {}
+    flags = cfg.get("feature_flags") or {}
+    return {
+        "group_creation_enabled": bool(flags.get("group_creation_enabled", True)),
+        "group_verification_enabled": bool(flags.get("group_verification_enabled", True)),
+        "group_messaging_enabled": bool(flags.get("group_messaging_enabled", True)),
+    }
+
+
+@api.post("/messenger/admin/controls")
+async def messenger_admin_set_controls(body: MessengerAdminControlsBody, admin=Depends(require_messenger_admin)):
+    incoming = body.dict(exclude_unset=True)
+    cfg = await db.config.find_one({"id": "app"}, {"_id": 0, "feature_flags": 1}) or {}
+    flags = dict(cfg.get("feature_flags") or {})
+    for key in ("group_creation_enabled", "group_verification_enabled", "group_messaging_enabled"):
+        if key in incoming:
+            flags[key] = bool(incoming[key])
+    await db.config.update_one({"id": "app"}, {"$set": {"id": "app", "feature_flags": flags}}, upsert=True)
+    await admin_audit("update_messenger_controls", "config", "app", "Messenger controls updated", None, incoming)
+    return {"ok": True, **{k: bool(flags.get(k, True)) for k in ("group_creation_enabled", "group_verification_enabled", "group_messaging_enabled")}}
 
 
 # ----------------------------- notifications -----------------------------
@@ -2322,6 +2716,14 @@ async def admin_reports(_=Depends(require_admin)):
             u = await db.users.find_one({"id": r["target_id"]}, {"_id": 0})
             if u:
                 target = {"type": "user", "full_name": u.get("full_name"), "username": u.get("username"), "avatar": u.get("avatar")}
+        elif r["target_type"] == "group":
+            g = await db.conversations.find_one({"id": r["target_id"], "is_group": True}, {"_id": 0})
+            if g:
+                target = {"type": "group", "name": g.get("name"), "avatar": g.get("avatar"), "created_by": g.get("created_by")}
+        elif r["target_type"] == "message":
+            m = await db.messages.find_one({"id": r["target_id"], "is_group": True}, {"_id": 0})
+            if m:
+                target = {"type": "message", "text": m.get("text"), "media": m.get("media"), "author_id": m.get("from_user"), "group_id": m.get("conversation_id")}
         r["target"] = target
         out.append(r)
     return out
@@ -2347,6 +2749,18 @@ async def delete_reported(report_id: str, body: AdminReasonBody = AdminReasonBod
         target = await db.comments.find_one({"id": r["target_id"]})
         author_id = target.get("author_id") if target else None
         await db.comments.update_one({"id": r["target_id"]}, {"$set": {"deleted_at": ts, "moderation_reason": reason, "moderated_by": "admin"}})
+    elif r["target_type"] == "group":
+        target = await db.conversations.find_one({"id": r["target_id"], "is_group": True})
+        author_id = target.get("created_by") if target else None
+        await db.conversations.update_one({"id": r["target_id"]}, {"$set": {
+            "disabled": True, "disabled_reason": reason, "verified": False, "verification_badge": None
+        }, "$inc": {"moderation_strikes": 1}})
+    elif r["target_type"] == "message":
+        target = await db.messages.find_one({"id": r["target_id"], "is_group": True})
+        author_id = target.get("from_user") if target else None
+        await db.messages.update_one({"id": r["target_id"]}, {"$set": {
+            "deleted_at": ts, "moderation_reason": reason, "moderated_by": "admin"
+        }})
     elif r["target_type"] == "user":
         author_id = r["target_id"]
         await admin_permanent_remove_user(r["target_id"], reason)
