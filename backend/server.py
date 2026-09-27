@@ -1034,7 +1034,10 @@ async def get_user(username: str, me=Depends(get_current_user)):
         "follower_id": me["id"], "following_id": u["id"]
     }) is not None
     profile_privacy = u.get("privacy", "public")
-    can_view = data["is_me"] or profile_privacy == "public" or (profile_privacy == "friends" and friend)
+    blocked_either_way = u["id"] in set(me.get("blocked", [])) or me["id"] in set(u.get("blocked", []))
+    can_view = (not blocked_either_way) and (
+        data["is_me"] or profile_privacy == "public" or (profile_privacy == "friends" and friend)
+    )
     data["can_view"] = can_view
     contact_visibility = u.get("contact_visibility", "only_me")
     data["contact_visibility"] = contact_visibility
@@ -1313,10 +1316,18 @@ async def serialize_post(p: dict, me_id: str) -> dict:
 
 
 async def feed_posts_for_author(author_id: str, me_id: str):
+    author = await db.users.find_one({"id": author_id, "deleted_at": None}, {"_id": 0})
+    if not author:
+        return []
+    friend_ids = {me_id}
+    async for friendship in db.friendships.find({"users": me_id}):
+        for uid in friendship.get("users", []):
+            friend_ids.add(uid)
     cur = db.posts.find({"author_id": author_id, "deleted_at": None}).sort("created_at", -1).limit(50)
     out = []
     async for p in cur:
-        out.append(await serialize_post(p, me_id))
+        if await can_view_post(p, author, me_id, friend_ids):
+            out.append(await serialize_post(p, me_id))
     return out
 
 
