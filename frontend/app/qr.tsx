@@ -9,6 +9,7 @@ import { Icon } from "@/src/components/Icon";
 import { Button } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
 import { useAuth } from "@/src/context/AuthContext";
+import { profileShareUrl } from "@/src/lib/shareLinks";
 
 export default function QRShare() {
   const styles = useStyles();
@@ -18,7 +19,7 @@ export default function QRShare() {
   const toast = useToast();
   const { user } = useAuth();
 
-  const link = `glint.app/${user?.username}`;
+  const link = user?.username ? profileShareUrl(user.username) : "";
 
   async function copy() {
     await Clipboard.setStringAsync(link);
@@ -46,7 +47,7 @@ export default function QRShare() {
           </View>
           <Text style={styles.handle}>{link}</Text>
           <View style={styles.qrWrap}>
-            <QRCode value={`https://${link}`} size={200} color={colors.onSurface} backgroundColor={colors.surfaceSecondary} />
+            <QRCode value={link} size={200} color={colors.onSurface} backgroundColor={colors.surfaceSecondary} />
           </View>
           <Text style={styles.hint}>Scan to view {user?.full_name?.split(" ")[0]}&apos;s Glint profile</Text>
         </View>
