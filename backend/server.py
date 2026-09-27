@@ -1797,6 +1797,24 @@ async def delete_story(story_id: str, me=Depends(get_current_user)):
     return {"ok": True}
 
 
+# ----------------------------- messenger client -----------------------------
+@api.get("/messenger/bootstrap")
+async def messenger_bootstrap(me=Depends(get_current_user)):
+    """
+    Shared bootstrap for the future Glint Messenger app.
+    Messenger uses the same Glint account, users, conversations and messages
+    as the main social app, so no second account database is created.
+    """
+    chats = await conversations(me) if "conversations" in globals() else []
+    return {
+        "app": "Glint Messenger",
+        "account": public_user(me),
+        "uses_shared_glint_account": True,
+        "chat_api": "/api/chat",
+        "conversations": chats,
+    }
+
+
 # ----------------------------- chat -----------------------------
 def conv_id_for(a: str, b: str) -> str:
     return "_".join(sorted([a, b]))
@@ -1822,6 +1840,9 @@ async def conversations(me=Depends(get_current_user)):
                 "avatar": c.get("avatar"),
                 "members": members,
                 "member_count": len(c.get("participants", [])),
+                "verified": bool(c.get("verified", False)),
+                "verification_status": c.get("verification_status", "not_applied"),
+                "verification_badge": c.get("verification_badge"),
                 "last_message": c.get("last_message"),
                 "last_type": c.get("last_type", "text"),
                 "updated_at": c.get("updated_at"),
@@ -1869,6 +1890,9 @@ async def create_group(body: GroupCreate, me=Depends(get_current_user)):
     await db.conversations.insert_one({
         "id": gid, "is_group": True, "name": body.name.strip(), "avatar": body.avatar,
         "participants": members, "created_by": me["id"], "muted_by": [],
+        # Reserved for the future Glint Messenger group Green Tick flow.
+        "verified": False, "verification_status": "not_applied",
+        "verification_badge": None, "verified_at": None, "verified_by": None,
         "last_message": f"{me['full_name']} created the group", "last_type": "system",
         "updated_at": now_iso(), "created_at": now_iso(),
     })
@@ -1903,6 +1927,9 @@ async def get_group(group_id: str, me=Depends(get_current_user)):
     return {
         "id": group_id, "is_group": True, "name": conv.get("name"), "avatar": conv.get("avatar"),
         "members": members, "member_count": len(members), "messages": msgs,
+        "verified": bool(conv.get("verified", False)),
+        "verification_status": conv.get("verification_status", "not_applied"),
+        "verification_badge": conv.get("verification_badge"),
         "muted": me["id"] in conv.get("muted_by", []),
     }
 
