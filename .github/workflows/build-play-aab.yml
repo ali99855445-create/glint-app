@@ -55,7 +55,7 @@ jobs:
           p = Path('android/app/build.gradle')
           s = p.read_text()
           marker = '    buildTypes {'
-          signing = '''    signingConfigs {
+          signing = """    signingConfigs {
               release {
                   storeFile file('glint-upload-key.jks')
                   storePassword System.getenv('GLINT_STORE_PASSWORD')
@@ -63,7 +63,7 @@ jobs:
                   keyPassword System.getenv('GLINT_KEY_PASSWORD')
               }
           }
-      '''
+          """
           if marker not in s:
               raise SystemExit('Could not find buildTypes in android/app/build.gradle')
           if 'glint-upload-key.jks' not in s:
