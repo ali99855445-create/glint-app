@@ -38,12 +38,17 @@ jobs:
         working-directory: frontend
         run: npx expo prebuild --platform android --clean --no-install
 
-      - name: Restore Play upload keystore
+      - name: Restore and validate Play upload keystore
         env:
           GLINT_UPLOAD_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
+          set -euo pipefail
           test -n "$GLINT_UPLOAD_KEYSTORE_BASE64" || { echo "Missing KEYSTORE_BASE64 secret"; exit 1; }
+          test -n "$GLINT_STORE_PASSWORD" || { echo "Missing KEYSTORE_PASSWORD secret"; exit 1; }
+          test -n "$GLINT_KEY_ALIAS" || { echo "Missing KEY_ALIAS secret"; exit 1; }
+          test -n "$GLINT_KEY_PASSWORD" || { echo "Missing KEY_PASSWORD secret"; exit 1; }
           printf '%s' "$GLINT_UPLOAD_KEYSTORE_BASE64" | base64 --decode > frontend/android/app/glint-upload-key.jks
+          keytool -list -keystore frontend/android/app/glint-upload-key.jks -storepass "$GLINT_STORE_PASSWORD" -alias "$GLINT_KEY_ALIAS" >/dev/null
 
       - name: Configure release signing
         working-directory: frontend
@@ -69,18 +74,40 @@ jobs:
           release_marker = '        release {'
           if release_marker not in s:
               raise SystemExit('Could not find release build type')
-          block_start = s.index(release_marker)
-          if 'signingConfig signingConfigs.release' not in s[block_start:block_start+1200]:
-              s = s[:block_start+len(release_marker)] + '\n            signingConfig signingConfigs.release' + s[block_start+len(release_marker):]
+          start = s.index(release_marker)
+          tail = s[start:start+1600]
+          # Expo prebuild commonly places debug signing in release. Replace it explicitly.
+          tail = tail.replace('signingConfig signingConfigs.debug', 'signingConfig signingConfigs.release')
+          if 'signingConfig signingConfigs.release' not in tail:
+              tail = tail.replace(release_marker, release_marker + '\n            signingConfig signingConfigs.release', 1)
+          s = s[:start] + tail + s[start+1600:]
           p.write_text(s)
           PY
+          echo '--- release signing configuration ---'
+          grep -n -A18 -B4 'release {' android/app/build.gradle
+          if grep -A18 'release {' android/app/build.gradle | grep -q 'signingConfig signingConfigs.debug'; then
+            echo 'ERROR: release build still uses debug signing'
+            exit 1
+          fi
+          grep -A18 'release {' android/app/build.gradle | grep -q 'signingConfig signingConfigs.release' || { echo 'ERROR: release signing not configured'; exit 1; }
 
       - name: Build signed Android App Bundle
         working-directory: frontend/android
         run: chmod +x gradlew && ./gradlew bundleRelease --no-daemon
 
-      - name: Verify AAB signature
-        run: jarsigner -verify -verbose -certs frontend/android/app/build/outputs/bundle/release/app-release.aab >/dev/null
+      - name: Verify AAB release certificate
+        run: |
+          set -euo pipefail
+          AAB=frontend/android/app/build/outputs/bundle/release/app-release.aab
+          test -f "$AAB"
+          jarsigner -verify -verbose -certs "$AAB" >/dev/null
+          keytool -printcert -jarfile "$AAB" > /tmp/aab-cert.txt
+          cat /tmp/aab-cert.txt
+          if grep -Eqi 'CN=Android Debug|Android Debug' /tmp/aab-cert.txt; then
+            echo 'ERROR: AAB is signed with Android debug certificate; refusing to upload artifact.'
+            exit 1
+          fi
+          echo 'AAB certificate is not Android Debug. Release artifact accepted.'
 
       - name: Upload signed AAB
         uses: actions/upload-artifact@v4
