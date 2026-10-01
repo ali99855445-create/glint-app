@@ -55,8 +55,11 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
+
           p = Path('android/app/build.gradle')
           s = p.read_text()
+
           marker = '    buildTypes {'
           signing = """    signingConfigs {
               release {
@@ -71,25 +74,58 @@ jobs:
               raise SystemExit('Could not find buildTypes in android/app/build.gradle')
           if 'glint-upload-key.jks' not in s:
               s = s.replace(marker, signing + marker, 1)
-          release_marker = '        release {'
-          if release_marker not in s:
-              raise SystemExit('Could not find release build type')
-          start = s.index(release_marker)
-          tail = s[start:start+1600]
-          # Expo prebuild commonly places debug signing in release. Replace it explicitly.
-          tail = tail.replace('signingConfig signingConfigs.debug', 'signingConfig signingConfigs.release')
-          if 'signingConfig signingConfigs.release' not in tail:
-              tail = tail.replace(release_marker, release_marker + '\n            signingConfig signingConfigs.release', 1)
-          s = s[:start] + tail + s[start+1600:]
+
+          # Locate only buildTypes.release (not signingConfigs.release).
+          bt = s.index(marker)
+          rel = s.find('        release {', bt)
+          if rel < 0:
+              raise SystemExit('Could not find buildTypes release block')
+
+          # Find the matching closing brace for the release block.
+          brace = s.index('{', rel)
+          depth = 0
+          end = None
+          for i in range(brace, len(s)):
+              if s[i] == '{':
+                  depth += 1
+              elif s[i] == '}':
+                  depth -= 1
+                  if depth == 0:
+                      end = i + 1
+                      break
+          if end is None:
+              raise SystemExit('Could not parse release block')
+
+          block = s[rel:end]
+          block = block.replace('signingConfig signingConfigs.debug', 'signingConfig signingConfigs.release')
+          if 'signingConfig signingConfigs.release' not in block:
+              block = block.replace('        release {', '        release {\n            signingConfig signingConfigs.release', 1)
+          s = s[:rel] + block + s[end:]
           p.write_text(s)
+
+          # Validate ONLY the buildTypes.release block.
+          final = p.read_text()
+          bt = final.index(marker)
+          rel = final.find('        release {', bt)
+          brace = final.index('{', rel)
+          depth = 0
+          end = None
+          for i in range(brace, len(final)):
+              if final[i] == '{': depth += 1
+              elif final[i] == '}':
+                  depth -= 1
+                  if depth == 0:
+                      end = i + 1
+                      break
+          block = final[rel:end]
+          print('--- buildTypes.release ---')
+          print(block)
+          if 'signingConfig signingConfigs.debug' in block:
+              raise SystemExit('ERROR: buildTypes.release still uses debug signing')
+          if 'signingConfig signingConfigs.release' not in block:
+              raise SystemExit('ERROR: buildTypes.release is not using release signing')
+          print('Release signing configuration OK')
           PY
-          echo '--- release signing configuration ---'
-          grep -n -A18 -B4 'release {' android/app/build.gradle
-          if grep -A18 'release {' android/app/build.gradle | grep -q 'signingConfig signingConfigs.debug'; then
-            echo 'ERROR: release build still uses debug signing'
-            exit 1
-          fi
-          grep -A18 'release {' android/app/build.gradle | grep -q 'signingConfig signingConfigs.release' || { echo 'ERROR: release signing not configured'; exit 1; }
 
       - name: Build signed Android App Bundle
         working-directory: frontend/android
