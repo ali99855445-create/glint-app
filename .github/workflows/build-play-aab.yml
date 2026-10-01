@@ -11,9 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       EXPO_PUBLIC_BACKEND_URL: https://glint-api-xf2i.onrender.com
-      GLINT_STORE_PASSWORD: ${{ secrets.GLINT_STORE_PASSWORD }}
-      GLINT_KEY_PASSWORD: ${{ secrets.GLINT_KEY_PASSWORD }}
-      GLINT_KEY_ALIAS: ${{ secrets.GLINT_KEY_ALIAS }}
+      GLINT_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      GLINT_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      GLINT_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
 
     steps:
       - name: Checkout Code
@@ -42,9 +42,9 @@ jobs:
 
       - name: Restore Play upload keystore
         env:
-          GLINT_UPLOAD_KEYSTORE_BASE64: ${{ secrets.GLINT_UPLOAD_KEYSTORE_BASE64 }}
+          GLINT_UPLOAD_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          test -n "$GLINT_UPLOAD_KEYSTORE_BASE64" || { echo "Missing GLINT_UPLOAD_KEYSTORE_BASE64 secret"; exit 1; }
+          test -n "$GLINT_UPLOAD_KEYSTORE_BASE64" || { echo "Missing KEYSTORE_BASE64 secret"; exit 1; }
           printf '%s' "$GLINT_UPLOAD_KEYSTORE_BASE64" | base64 --decode > frontend/android/app/glint-upload-key.jks
 
       - name: Configure release signing
