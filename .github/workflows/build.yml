@@ -1,4 +1,4 @@
-name: Build Glint Android APK
+name: Build Glint Play AAB
 
 on:
   push:
@@ -60,17 +60,12 @@ jobs:
         working-directory: frontend/android
         run: chmod +x gradlew && ./gradlew clean --no-daemon
 
-      - name: Build real Glint APK
+      - name: Build Glint Play AAB
         working-directory: frontend/android
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
+        run: ./gradlew bundleRelease --no-daemon --stacktrace
 
-      - name: Print dependency tree if build fails
-        if: failure()
-        working-directory: frontend/android
-        run: ./gradlew app:dependencies --configuration releaseRuntimeClasspath --no-daemon || true
-
-      - name: Upload APK
+      - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
-          name: glint-social-app-release
-          path: frontend/android/app/build/outputs/apk/release/app-release.apk
+          name: glint-play-aab-v1.0.14
+          path: frontend/android/app/build/outputs/bundle/release/app-release.aab
