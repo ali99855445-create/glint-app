@@ -30,10 +30,8 @@ export default function EditProfile() {
   const [avatar, setAvatar] = useState(user?.avatar || null);
   const [cover, setCover] = useState(user?.cover || null);
   const [saving, setSaving] = useState(false);
+  const [coverSaving, setCoverSaving] = useState(false);
 
-  // AuthContext user can load AFTER this screen mounts (cold open / refresh).
-  // Sync the form once the user object arrives so fields are never blank
-  // and Save never wipes existing profile data.
   useEffect(() => {
     if (user) {
       setFullName(user.full_name || "");
@@ -53,13 +51,25 @@ export default function EditProfile() {
       toast.show(e.message || "Upload failed", "error");
     }
   }
+
   async function changeCover() {
+    if (coverSaving) return;
     try {
+      setCoverSaving(true);
       const r = await pickAndUploadImage({ aspect: [16, 9] });
       if (r?.denied) return toast.show("Photo permission needed", "error");
-      if (r?.url) setCover(r.url);
+      if (!r?.url) return;
+
+      // Cover is deliberately persisted on its own. Never send avatar here.
+      // This prevents a cover selection from being interpreted as a profile-photo change.
+      await api.put("/users/me", { cover: r.url });
+      setCover(r.url);
+      await refresh();
+      toast.show("Cover photo updated", "success");
     } catch (e: any) {
-      toast.show(e.message || "Upload failed", "error");
+      toast.show(e.message || "Cover photo update failed", "error");
+    } finally {
+      setCoverSaving(false);
     }
   }
 
@@ -67,7 +77,14 @@ export default function EditProfile() {
     if (!fullName.trim()) return toast.show("Name can't be empty", "error");
     setSaving(true);
     try {
-      await api.put("/users/me", { full_name: fullName.trim(), bio: bio.trim() || null, location: location.trim() || null, avatar, cover });
+      // Cover has its own update path above. Keep it out of the general profile
+      // payload so avatar and cover can never overwrite one another.
+      await api.put("/users/me", {
+        full_name: fullName.trim(),
+        bio: bio.trim() || null,
+        location: location.trim() || null,
+        avatar,
+      });
       await refresh();
       toast.show("Profile updated", "success");
       router.back();
@@ -87,10 +104,13 @@ export default function EditProfile() {
       </View>
 
       <KeyboardAwareScrollView contentContainerStyle={{ paddingBottom: spacing["2xl"] }} keyboardShouldPersistTaps="handled" bottomOffset={20}>
-        <Pressable style={styles.coverWrap} onPress={changeCover} testID="edit-cover">
+        <Pressable style={styles.coverWrap} onPress={changeCover} testID="edit-cover" disabled={coverSaving}>
           <Image source={{ uri: fileUrl(cover) || DEFAULT_COVER }} style={styles.cover} contentFit="cover" />
           <LinearGradient colors={["transparent", "rgba(0,0,0,0.4)"]} style={styles.coverScrim} />
-          <View style={styles.coverEdit}><Icon name="camera" size={18} color="#FFFFFF" /><Text style={styles.coverEditText}>Change cover</Text></View>
+          <View style={styles.coverEdit}>
+            {coverSaving ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Icon name="camera" size={18} color="#FFFFFF" />}
+            <Text style={styles.coverEditText}>{coverSaving ? "Updating..." : "Change cover"}</Text>
+          </View>
         </Pressable>
 
         <View style={styles.avatarWrap}>
