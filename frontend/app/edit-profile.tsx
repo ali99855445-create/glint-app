@@ -27,6 +27,7 @@ export default function EditProfile() {
   const [fullName, setFullName] = useState(user?.full_name || "");
   const [bio, setBio] = useState(user?.bio || "");
   const [location, setLocation] = useState(user?.location || "");
+  const [dateOfBirth, setDateOfBirth] = useState(user?.date_of_birth || "");
   const [avatar, setAvatar] = useState(user?.avatar || null);
   const [cover, setCover] = useState(user?.cover || null);
   const [saving, setSaving] = useState(false);
@@ -37,6 +38,7 @@ export default function EditProfile() {
       setFullName(user.full_name || "");
       setBio(user.bio || "");
       setLocation(user.location || "");
+      setDateOfBirth(user.date_of_birth || "");
       setAvatar(user.avatar || null);
       setCover(user.cover || null);
     }
@@ -59,9 +61,6 @@ export default function EditProfile() {
       const r = await pickAndUploadImage({ aspect: [16, 9] });
       if (r?.denied) return toast.show("Photo permission needed", "error");
       if (!r?.url) return;
-
-      // Cover is deliberately persisted on its own. Never send avatar here.
-      // This prevents a cover selection from being interpreted as a profile-photo change.
       await api.put("/users/me", { cover: r.url });
       setCover(r.url);
       await refresh();
@@ -75,14 +74,15 @@ export default function EditProfile() {
 
   async function save() {
     if (!fullName.trim()) return toast.show("Name can't be empty", "error");
+    const dob = dateOfBirth.trim();
+    if (dob && !/^\d{4}-\d{2}-\d{2}$/.test(dob)) return toast.show("Date of birth must use YYYY-MM-DD", "error");
     setSaving(true);
     try {
-      // Cover has its own update path above. Keep it out of the general profile
-      // payload so avatar and cover can never overwrite one another.
       await api.put("/users/me", {
         full_name: fullName.trim(),
         bio: bio.trim() || null,
         location: location.trim() || null,
+        date_of_birth: dob || null,
         avatar,
       });
       await refresh();
@@ -127,6 +127,9 @@ export default function EditProfile() {
           <Field value={bio} onChangeText={setBio} placeholder="Tell your story..." multiline maxLength={160} testID="edit-bio" />
           <Text style={styles.label}>Location</Text>
           <Field value={location} onChangeText={setLocation} placeholder="Location" testID="edit-location" icon={<Icon name="location-outline" size={20} color={colors.muted} />} />
+          <Text style={styles.label}>Date of birth</Text>
+          <Field value={dateOfBirth} onChangeText={setDateOfBirth} placeholder="YYYY-MM-DD" testID="edit-date-of-birth" />
+          <Text style={styles.hint}>Your date of birth is used for account eligibility and identity verification.</Text>
           <Button title="Save changes" onPress={save} loading={saving} testID="edit-save" style={{ marginTop: spacing.lg }} />
         </View>
       </KeyboardAwareScrollView>
@@ -149,4 +152,5 @@ const useStyles = makeStyles((c) => ({
   avatarEdit: { position: "absolute", bottom: 4, right: 4, width: 30, height: 30, borderRadius: 15, backgroundColor: c.brandPrimary, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: c.surface },
   form: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.sm },
   label: { color: c.onSurfaceSecondary, fontFamily: fonts.semibold, fontSize: 14, marginTop: spacing.sm },
+  hint: { color: c.muted, fontFamily: fonts.regular, fontSize: 12, lineHeight: 17 },
 }));
