@@ -9,197 +9,51 @@ import React from "react";
 import { makeStyles, useTheme, fonts, spacing, radius } from "@/src/theme";
 import { Field, Button } from "@/src/components/ui";
 import { Icon } from "@/src/components/Icon";
-import { BlueTick } from "@/src/components/Avatar";
+import { Avatar, BlueTick } from "@/src/components/Avatar";
 import { useToast } from "@/src/components/Toast";
+import { useAuth } from "@/src/context/AuthContext";
 import { api, fileUrl } from "@/src/api/client";
 import { pickAndUploadImage, takeAndUploadSelfie } from "@/src/lib/media";
 
+const BLUE_PRICES: Record<string,string>={SA:"SAR 19.99/month",AE:"AED 19.99/month",QA:"QAR 19.99/month",KW:"KWD 1.49/month",PK:"PKR 699/month",IN:"INR 199/month"};
+const BLUE_BENEFITS=[
+  ["checkmark-circle","Blue badge everywhere","Your Blue Tick appears across supported Glint surfaces."],
+  ["shield-checkmark","Impersonation protection","Priority review for reports about accounts pretending to be you."],
+  ["videocam","60-second video Stories","Post video Stories up to 60 seconds; Stories expire after 24 hours."],
+  ["help-buoy","Priority Glint support","Get priority access to Glint support for account issues."],
+  ["link","Two external social links","Add up to two external social links to your profile."],
+];
+
 export default function Verification() {
-  const styles = useStyles();
-  const { colors } = useTheme();
-  const insets = useSafeAreaInsets();
-  const router = useRouter();
-  const toast = useToast();
+  const styles=useStyles(); const {colors}=useTheme(); const insets=useSafeAreaInsets(); const router=useRouter(); const toast=useToast(); const {user}=useAuth();
+  const status=useQuery({queryKey:["verification"],queryFn:()=>api.get("/verification/me")});
+  useFocusEffect(React.useCallback(()=>{status.refetch();},[]));
+  const [checkoutStarted,setCheckoutStarted]=useState(false);
+  const [legalName,setLegalName]=useState(""); const [note,setNote]=useState(""); const [doc,setDoc]=useState<string|null>(null); const [selfie,setSelfie]=useState<string|null>(null); const [submitting,setSubmitting]=useState(false);
+  const current=status.data?.status; const eligibility=status.data?.eligibility; const eligible=!!eligibility?.account_old_enough&&!!eligibility?.phone_verified;
+  const country=String(status.data?.country_code||status.data?.country||user?.country_code||"SA").toUpperCase();
+  const price=BLUE_PRICES[country]||BLUE_PRICES.SA;
+  const paymentConfirmed=Boolean(status.data?.blue_payment_confirmed||status.data?.payment_confirmed||status.data?.subscription_paid);
+  const showIdentity=paymentConfirmed||checkoutStarted||current==="pending"||current==="approved"||current==="rejected";
 
-  const status = useQuery({ queryKey: ["verification"], queryFn: () => api.get("/verification/me") });
-  useFocusEffect(React.useCallback(() => { status.refetch(); }, []));
-
-  const [legalName, setLegalName] = useState("");
-  const [note, setNote] = useState("");
-  const [doc, setDoc] = useState<string | null>(null);
-  const [selfie, setSelfie] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  const current = status.data?.status;
-  const eligibility = status.data?.eligibility;
-  const eligible = !!eligibility?.account_old_enough && !!eligibility?.phone_verified;
-
-  async function uploadDoc() {
-    try {
-      const r = await pickAndUploadImage({ quality: 0.75 });
-      if (r?.denied) return toast.show("Photo permission needed", "error");
-      if (r?.url) setDoc(r.url);
-    } catch (e: any) {
-      toast.show(e.message || "Upload failed", "error");
-    }
+  async function uploadDoc(){try{const r=await pickAndUploadImage({quality:.75});if(r?.denied)return toast.show("Photo permission needed","error");if(r?.url)setDoc(r.url);}catch(e:any){toast.show(e.message||"Upload failed","error")}}
+  async function captureSelfie(){try{const r=await takeAndUploadSelfie(.75);if(r?.denied)return toast.show("Camera permission needed","error");if(r?.url)setSelfie(r.url);}catch(e:any){toast.show(e.message||"Selfie upload failed","error")}}
+  function continueToPayment(){
+    // Google Play Billing will replace this hand-off once the Play subscription
+    // product is configured. Identity review remains after successful payment.
+    setCheckoutStarted(true);
+    toast.show("Payment step will use Google Play Billing in the final build.","success");
   }
+  async function submit(){if(!eligibility?.account_old_enough)return toast.show("Account must be at least 2 months old","error");if(!eligibility?.phone_verified)return toast.show("A verified phone number is required","error");if(!legalName.trim())return toast.show("Enter your full legal name","error");if(!doc)return toast.show("Upload an ID document","error");if(!selfie)return toast.show("Take a live selfie","error");setSubmitting(true);try{await api.post("/verification",{document:doc,selfie,full_legal_name:legalName.trim(),note:note.trim()||null});toast.show("Verification submitted!","success");status.refetch();}catch(e:any){toast.show(e.message,"error");}finally{setSubmitting(false)}}
+  const StatusBanner=()=>{if(current==="pending")return <Banner icon="hourglass-outline" color={colors.warning} title="Under review" text="Your identity documents and live selfie are being reviewed."/>;if(current==="approved")return <Banner icon="checkmark-circle" color="#1877F2" title="You're verified!" text="Your Blue Tick and Blue benefits are active."/>;if(current==="rejected")return <Banner icon="close-circle" color={colors.error} title="Request declined" text="Your last verification request was declined."/>;return null};
 
-  async function captureSelfie() {
-    try {
-      const r = await takeAndUploadSelfie(0.75);
-      if (r?.denied) return toast.show("Camera permission needed", "error");
-      if (r?.url) setSelfie(r.url);
-    } catch (e: any) {
-      toast.show(e.message || "Selfie upload failed", "error");
-    }
-  }
-
-  async function submit() {
-    if (!eligibility?.account_old_enough) return toast.show("Account must be at least 2 months old", "error");
-    if (!eligibility?.phone_verified) return toast.show("A verified phone number is required", "error");
-    if (!legalName.trim()) return toast.show("Enter your full legal name", "error");
-    if (!doc) return toast.show("Upload an ID document", "error");
-    if (!selfie) return toast.show("Take a live selfie", "error");
-
-    setSubmitting(true);
-    try {
-      await api.post("/verification", {
-        document: doc,
-        selfie,
-        full_legal_name: legalName.trim(),
-        note: note.trim() || null,
-      });
-      toast.show("Verification submitted!", "success");
-      status.refetch();
-    } catch (e: any) {
-      toast.show(e.message, "error");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  const StatusBanner = () => {
-    if (current === "pending") return <Banner icon="hourglass-outline" color={colors.warning} title="Under review" text="Your verification request is being reviewed by our team." />;
-    if (current === "approved") return <Banner icon="checkmark-circle" color="#1877F2" title="You're verified!" text="Your Blue Tick is now visible across Glint." />;
-    if (current === "rejected") return <Banner icon="close-circle" color={colors.error} title="Request declined" text="Your last request was declined. You can submit a new one below." />;
-    return null;
-  };
-
-  return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.iconBtn} testID="verification-back"><Icon name="chevron-back" size={26} color={colors.onSurface} /></Pressable>
-        <Text style={styles.title}>Get Verified</Text>
-        <View style={{ width: 40 }} />
-      </View>
-
-      <KeyboardAwareScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg, paddingBottom: spacing["2xl"] }} keyboardShouldPersistTaps="handled" bottomOffset={20}>
-        <View style={styles.hero}>
-          <BlueTick size={44} />
-          <Text style={styles.heroTitle}>Blue Tick</Text>
-          <Text style={styles.heroText}>Confirm your identity and eligibility to receive Glint's verified badge.</Text>
-        </View>
-
-        <View style={styles.rulesCard}>
-          <Text style={styles.rulesTitle}>Verification requirements</Text>
-          <Rule ok={!!eligibility?.account_old_enough} text={`Account at least 2 months old${eligibility ? ` · ${eligibility.account_age_days ?? 0} days` : ""}`} />
-          <Rule ok={!!eligibility?.phone_verified} text="Phone number verified" />
-          <Rule ok={!!doc} text="Government ID or official document" />
-          <Rule ok={!!selfie} text="Live selfie taken in the app" />
-        </View>
-
-        <StatusBanner />
-
-        {current !== "pending" && current !== "approved" && (
-          <>
-            {!eligible && (
-              <View style={styles.eligibilityNote}>
-                <Icon name="information-circle-outline" size={20} color={colors.onBrandTertiary} />
-                <Text style={styles.eligibilityText}>You can prepare your documents now, but submission is enabled only after the account-age and verified-phone requirements are met.</Text>
-              </View>
-            )}
-
-            <Field value={legalName} onChangeText={setLegalName} placeholder="Full legal name" testID="verification-name" icon={<Icon name="person-outline" size={20} color={colors.muted} />} />
-
-            <Pressable style={styles.uploadCard} onPress={uploadDoc} testID="verification-upload-doc">
-              {doc ? (
-                <Image source={{ uri: fileUrl(doc) }} style={styles.uploadImage} contentFit="cover" />
-              ) : (
-                <>
-                  <Icon name="document-text-outline" size={34} color={colors.brand} />
-                  <Text style={styles.uploadTitle}>Upload ID document</Text>
-                  <Text style={styles.uploadSub}>Government ID or another accepted identity document</Text>
-                </>
-              )}
-            </Pressable>
-
-            <Pressable style={styles.uploadCard} onPress={captureSelfie} testID="verification-live-selfie">
-              {selfie ? (
-                <Image source={{ uri: fileUrl(selfie) }} style={styles.uploadImage} contentFit="cover" />
-              ) : (
-                <>
-                  <Icon name="camera-outline" size={34} color={colors.brand} />
-                  <Text style={styles.uploadTitle}>Take live selfie</Text>
-                  <Text style={styles.uploadSub}>Camera capture only — use a clear, recent photo of your face</Text>
-                </>
-              )}
-            </Pressable>
-
-            <Field value={note} onChangeText={setNote} placeholder="Anything we should know? (optional)" multiline testID="verification-note" />
-            <Button title="Submit request" onPress={submit} loading={submitting} disabled={!eligible} testID="verification-submit" />
-          </>
-        )}
-      </KeyboardAwareScrollView>
-    </View>
-  );
+  return <View style={[styles.root,{paddingTop:insets.top}]}><View style={styles.header}><Pressable onPress={()=>router.back()} style={styles.iconBtn}><Icon name="chevron-back" size={26} color={colors.onSurface}/></Pressable><Text style={styles.title}>Blue Verification</Text><View style={{width:40}}/></View><KeyboardAwareScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" bottomOffset={20}>
+    <View style={styles.hero}><View style={styles.profilePreview}><Avatar uri={user?.avatar} name={user?.full_name} size={72}/><View style={{alignItems:"center"}}><View style={styles.nameRow}><Text style={styles.profileName}>{user?.full_name||"Your profile"}</Text><BlueTick size={21}/></View><Text style={styles.previewLabel}>Preview of your Blue Tick</Text></View></View><Text style={styles.heroTitle}>Unlock Blue benefits</Text><Text style={styles.heroText}>Subscribe, confirm your identity, and get access after your verification is approved.</Text></View>
+    <StatusBanner/>
+    {!showIdentity&&<><View style={styles.planCard}><View style={styles.planTop}><View><Text style={styles.planName}>Glint Blue</Text><Text style={styles.price}>{price}</Text></View><View style={styles.monthlyPill}><Text style={styles.monthlyText}>Monthly</Text></View></View><Text style={styles.small}>Subscription does not guarantee verification. Your identity must be approved before the Blue Tick and benefits activate.</Text></View><View style={styles.benefitsCard}><Text style={styles.cardTitle}>Your 5 Blue benefits</Text>{BLUE_BENEFITS.map(([icon,title,text])=><View style={styles.benefit} key={title}><View style={styles.benefitIcon}><Icon name={icon as any} size={20} color={colors.brand}/></View><View style={{flex:1}}><Text style={styles.benefitTitle}>{title}</Text><Text style={styles.benefitText}>{text}</Text></View></View>)}</View><Button title={`Continue · ${price}`} onPress={continueToPayment} testID="blue-continue-payment"/><Text style={styles.legal}>Payment will be processed through Google Play when billing is enabled. After successful payment, you will submit your ID and live selfie for review.</Text></>}
+    {showIdentity&&<><View style={styles.rulesCard}><Text style={styles.cardTitle}>Identity verification</Text><Rule ok={!!eligibility?.account_old_enough} text={`Account at least 2 months old${eligibility?` · ${eligibility.account_age_days??0} days`:""}`}/><Rule ok={!!eligibility?.phone_verified} text="Phone number verified"/><Rule ok={!!doc} text="Government ID or official document"/><Rule ok={!!selfie} text="Live selfie taken in the app"/></View>{current!=="pending"&&current!=="approved"&&<>{!eligible&&<View style={styles.eligibilityNote}><Icon name="information-circle-outline" size={20} color={colors.onBrandTertiary}/><Text style={styles.eligibilityText}>Submission requires an account at least 2 months old and a verified phone number.</Text></View>}<Field value={legalName} onChangeText={setLegalName} placeholder="Full legal name" icon={<Icon name="person-outline" size={20} color={colors.muted}/>}/><Pressable style={styles.uploadCard} onPress={uploadDoc}>{doc?<Image source={{uri:fileUrl(doc)}} style={styles.uploadImage} contentFit="cover"/>:<><Icon name="document-text-outline" size={34} color={colors.brand}/><Text style={styles.uploadTitle}>Upload ID document</Text><Text style={styles.uploadSub}>Use a genuine, unaltered identity document belonging to you.</Text></>}</Pressable><Pressable style={styles.uploadCard} onPress={captureSelfie}>{selfie?<Image source={{uri:fileUrl(selfie)}} style={styles.uploadImage} contentFit="cover"/>:<><Icon name="camera-outline" size={34} color={colors.brand}/><Text style={styles.uploadTitle}>Take live selfie</Text><Text style={styles.uploadSub}>Camera capture only — use a clear, recent view of your face.</Text></>}</Pressable><Field value={note} onChangeText={setNote} placeholder="Anything we should know? (optional)" multiline/><Button title="Submit for review" onPress={submit} loading={submitting} disabled={!eligible}/><Text style={styles.legal}>Fake, forged, impersonation or AI-generated identity documents are prohibited. Repeated fraudulent submissions may restrict future verification applications.</Text></>}</>}
+  </KeyboardAwareScrollView></View>;
 }
-
-function Rule({ ok, text }: { ok: boolean; text: string }) {
-  const styles = useStyles();
-  const { colors } = useTheme();
-  return (
-    <View style={styles.ruleRow}>
-      <View style={[styles.ruleIcon, { backgroundColor: ok ? colors.brandTertiary : colors.surfaceTertiary }]}>
-        <Icon name={ok ? "checkmark" : "ellipse-outline"} size={16} color={ok ? colors.brand : colors.muted} />
-      </View>
-      <Text style={styles.ruleText}>{text}</Text>
-    </View>
-  );
-}
-
-function Banner({ icon, color, title, text }: any) {
-  const styles = useStyles();
-  return (
-    <View style={[styles.banner, { borderColor: color }]}>
-      <Icon name={icon} size={26} color={color} />
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.bannerTitle, { color }]}>{title}</Text>
-        <Text style={styles.bannerText}>{text}</Text>
-      </View>
-    </View>
-  );
-}
-
-const useStyles = makeStyles((c) => ({
-  root: { flex: 1, backgroundColor: c.surface },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
-  iconBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-  title: { color: c.onSurface, fontFamily: fonts.display, fontSize: 18 },
-  hero: { alignItems: "center", gap: spacing.sm, paddingVertical: spacing.md },
-  heroTitle: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 24 },
-  heroText: { color: c.muted, fontFamily: fonts.text, fontSize: 15, textAlign: "center", lineHeight: 22, paddingHorizontal: spacing.md },
-  rulesCard: { gap: spacing.md, padding: spacing.lg, backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.border, borderRadius: radius.md },
-  rulesTitle: { color: c.onSurface, fontFamily: fonts.displayBold, fontSize: 17 },
-  ruleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  ruleIcon: { width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center" },
-  ruleText: { flex: 1, color: c.onSurfaceSecondary, fontFamily: fonts.medium, fontSize: 14 },
-  banner: { flexDirection: "row", gap: spacing.md, alignItems: "center", backgroundColor: c.surfaceSecondary, borderWidth: 1.5, borderRadius: radius.md, padding: spacing.lg },
-  bannerTitle: { fontFamily: fonts.semibold, fontSize: 16 },
-  bannerText: { color: c.onSurfaceSecondary, fontFamily: fonts.text, fontSize: 14, marginTop: 2, lineHeight: 20 },
-  eligibilityNote: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm, padding: spacing.md, backgroundColor: c.brandTertiary, borderRadius: radius.md },
-  eligibilityText: { flex: 1, color: c.onBrandTertiary, fontFamily: fonts.text, fontSize: 13, lineHeight: 19 },
-  uploadCard: { minHeight: 150, borderWidth: 1.5, borderStyle: "dashed", borderColor: c.borderStrong, borderRadius: radius.md, alignItems: "center", justifyContent: "center", gap: spacing.xs, backgroundColor: c.surfaceSecondary, overflow: "hidden", padding: spacing.lg },
-  uploadImage: { width: "100%", height: 190, borderRadius: radius.sm },
-  uploadTitle: { color: c.onSurface, fontFamily: fonts.semibold, fontSize: 15 },
-  uploadSub: { color: c.muted, fontFamily: fonts.text, fontSize: 13, textAlign: "center", lineHeight: 18 },
-}));
+function Rule({ok,text}:{ok:boolean;text:string}){const styles=useStyles();const {colors}=useTheme();return <View style={styles.ruleRow}><View style={[styles.ruleIcon,{backgroundColor:ok?colors.brandTertiary:colors.surfaceTertiary}]}><Icon name={ok?"checkmark":"ellipse-outline"} size={16} color={ok?colors.brand:colors.muted}/></View><Text style={styles.ruleText}>{text}</Text></View>}
+function Banner({icon,color,title,text}:any){const styles=useStyles();return <View style={[styles.banner,{borderColor:color}]}><Icon name={icon} size={26} color={color}/><View style={{flex:1}}><Text style={[styles.bannerTitle,{color}]}>{title}</Text><Text style={styles.bannerText}>{text}</Text></View></View>}
+const useStyles=makeStyles(c=>({root:{flex:1,backgroundColor:c.surface},header:{flexDirection:"row",alignItems:"center",justifyContent:"space-between",paddingHorizontal:spacing.lg,paddingVertical:spacing.sm},iconBtn:{width:40,height:40,alignItems:"center",justifyContent:"center"},title:{color:c.onSurface,fontFamily:fonts.display,fontSize:18},body:{padding:spacing.lg,gap:spacing.lg,paddingBottom:spacing["2xl"]},hero:{alignItems:"center",gap:spacing.sm,paddingVertical:spacing.sm},profilePreview:{alignItems:"center",gap:spacing.sm},nameRow:{flexDirection:"row",alignItems:"center",gap:6},profileName:{color:c.onSurface,fontFamily:fonts.displayBold,fontSize:20},previewLabel:{color:c.muted,fontFamily:fonts.text,fontSize:12,marginTop:2},heroTitle:{color:c.onSurface,fontFamily:fonts.displayBold,fontSize:27,textAlign:"center",marginTop:spacing.sm},heroText:{color:c.muted,fontFamily:fonts.text,fontSize:14,textAlign:"center",lineHeight:21,paddingHorizontal:spacing.md},planCard:{backgroundColor:c.surfaceSecondary,borderWidth:1.5,borderColor:c.brand,borderRadius:radius.lg,padding:spacing.lg,gap:spacing.md},planTop:{flexDirection:"row",alignItems:"flex-start",justifyContent:"space-between"},planName:{color:c.onSurface,fontFamily:fonts.displayBold,fontSize:21},price:{color:c.brand,fontFamily:fonts.displayBold,fontSize:19,marginTop:4},monthlyPill:{backgroundColor:c.brandTertiary,borderRadius:radius.pill,paddingHorizontal:spacing.md,paddingVertical:spacing.xs},monthlyText:{color:c.onBrandTertiary,fontFamily:fonts.semibold,fontSize:12},small:{color:c.muted,fontFamily:fonts.text,fontSize:12,lineHeight:18},benefitsCard:{backgroundColor:c.surfaceSecondary,borderWidth:1,borderColor:c.border,borderRadius:radius.lg,padding:spacing.lg,gap:spacing.md},cardTitle:{color:c.onSurface,fontFamily:fonts.displayBold,fontSize:18},benefit:{flexDirection:"row",gap:spacing.md,alignItems:"flex-start"},benefitIcon:{width:38,height:38,borderRadius:19,backgroundColor:c.brandTertiary,alignItems:"center",justifyContent:"center"},benefitTitle:{color:c.onSurface,fontFamily:fonts.semibold,fontSize:15},benefitText:{color:c.muted,fontFamily:fonts.text,fontSize:12,lineHeight:18,marginTop:2},rulesCard:{gap:spacing.md,padding:spacing.lg,backgroundColor:c.surfaceSecondary,borderWidth:1,borderColor:c.border,borderRadius:radius.lg},ruleRow:{flexDirection:"row",alignItems:"center",gap:spacing.sm},ruleIcon:{width:28,height:28,borderRadius:14,alignItems:"center",justifyContent:"center"},ruleText:{flex:1,color:c.onSurfaceSecondary,fontFamily:fonts.medium,fontSize:14},banner:{flexDirection:"row",gap:spacing.md,alignItems:"center",backgroundColor:c.surfaceSecondary,borderWidth:1.5,borderRadius:radius.md,padding:spacing.lg},bannerTitle:{fontFamily:fonts.semibold,fontSize:16},bannerText:{color:c.onSurfaceSecondary,fontFamily:fonts.text,fontSize:14,marginTop:2,lineHeight:20},eligibilityNote:{flexDirection:"row",alignItems:"flex-start",gap:spacing.sm,padding:spacing.md,backgroundColor:c.brandTertiary,borderRadius:radius.md},eligibilityText:{flex:1,color:c.onBrandTertiary,fontFamily:fonts.text,fontSize:13,lineHeight:19},uploadCard:{minHeight:150,borderWidth:1.5,borderStyle:"dashed",borderColor:c.borderStrong,borderRadius:radius.md,alignItems:"center",justifyContent:"center",gap:spacing.xs,backgroundColor:c.surfaceSecondary,overflow:"hidden",padding:spacing.lg},uploadImage:{width:"100%",height:190,borderRadius:radius.sm},uploadTitle:{color:c.onSurface,fontFamily:fonts.semibold,fontSize:15},uploadSub:{color:c.muted,fontFamily:fonts.text,fontSize:13,textAlign:"center",lineHeight:18},legal:{color:c.muted,fontFamily:fonts.text,fontSize:11,lineHeight:17,textAlign:"center",paddingHorizontal:spacing.sm}}));
