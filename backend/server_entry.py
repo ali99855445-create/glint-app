@@ -7,6 +7,7 @@ the large legacy server.py file.
 """
 from server import app, db, get_current_user, now_iso
 from group_routes import install_group_management_routes
+from profile_edit_routes import install_profile_edit_routes
 
 # server.py has already included its legacy /api router by this point. Install
 # modular routes directly on the FastAPI application using a tiny adapter that
@@ -25,8 +26,17 @@ class _ApiPrefixAdapter:
         return self.target.delete("/api" + path, *args, **kwargs)
 
 
+_api = _ApiPrefixAdapter(app)
+
 install_group_management_routes(
-    _ApiPrefixAdapter(app),
+    _api,
+    db,
+    get_current_user,
+    now_iso,
+)
+
+install_profile_edit_routes(
+    _api,
     db,
     get_current_user,
     now_iso,
