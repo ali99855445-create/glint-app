@@ -1,0 +1,25 @@
+import { useState } from "react";
+import { View, Text, Pressable, ScrollView } from "react-native";
+import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { makeStyles, useTheme, fonts, spacing, radius } from "@/src/theme";
+import { Field, Button } from "@/src/components/ui";
+import { Icon } from "@/src/components/Icon";
+import { useToast } from "@/src/components/Toast";
+import { api } from "@/src/api/client";
+import { useBlueEntitlements } from "@/src/hooks/useBlueEntitlements";
+
+export default function BlueBenefits(){
+ const styles=useStyles(); const {colors}=useTheme(); const router=useRouter(); const insets=useSafeAreaInsets(); const toast=useToast(); const blue=useBlueEntitlements();
+ const [subject,setSubject]=useState(""); const [message,setMessage]=useState(""); const [reported,setReported]=useState(""); const [details,setDetails]=useState(""); const [busy,setBusy]=useState(false);
+ const active=!!blue.data?.blue?.active;
+ async function support(){if(!subject.trim()||!message.trim())return toast.show("Add subject and message","error");setBusy(true);try{await api.post("/blue/support",{subject:subject.trim(),message:message.trim()});setSubject("");setMessage("");toast.show("Priority support ticket sent","success");}catch(e:any){toast.show(e.message||"Could not send ticket","error");}finally{setBusy(false)}}
+ async function report(){if(!reported.trim())return toast.show("Enter the account user ID","error");setBusy(true);try{await api.post("/blue/impersonation-report",{reported_user_id:reported.trim(),details:details.trim()||null});setReported("");setDetails("");toast.show("Protection report submitted","success");}catch(e:any){toast.show(e.message||"Could not submit report","error");}finally{setBusy(false)}}
+ return <View style={[styles.root,{paddingTop:insets.top}]}><View style={styles.header}><Pressable onPress={()=>router.back()} style={styles.back}><Icon name="chevron-back" size={26} color={colors.onSurface}/></Pressable><Text style={styles.title}>Blue Tick Benefits</Text><View style={{width:40}}/></View><ScrollView contentContainerStyle={styles.body}>
+ <View style={styles.status}><Icon name={active?"checkmark-circle":"lock-closed"} size={28} color={active?colors.brandPrimary:colors.muted}/><View style={{flex:1}}><Text style={styles.cardTitle}>{active?"Blue Tick active":"Blue Tick required"}</Text><Text style={styles.sub}>{active?"Your verified benefits are unlocked.":"These tools unlock when Blue verification is active."}</Text></View></View>
+ <View style={styles.card}><Text style={styles.cardTitle}>Priority Support</Text><Text style={styles.sub}>Blue requests are marked as priority for the Glint support team.</Text><Field value={subject} onChangeText={setSubject} placeholder="Subject"/><Field value={message} onChangeText={setMessage} placeholder="Describe your issue" multiline/><Button title="Send priority ticket" onPress={support} loading={busy} disabled={!active}/></View>
+ <View style={styles.card}><Text style={styles.cardTitle}>Impersonation Protection</Text><Text style={styles.sub}>Report an account pretending to be you. Blue protection reports are placed in the protected-account queue.</Text><Field value={reported} onChangeText={setReported} placeholder="Reported user ID"/><Field value={details} onChangeText={setDetails} placeholder="Details (optional)" multiline/><Button title="Submit protection report" onPress={report} loading={busy} disabled={!active}/></View>
+ <View style={styles.card}><Text style={styles.cardTitle}>Other unlocked benefits</Text><Text style={styles.item}>✓ Blue badge across supported Glint surfaces</Text><Text style={styles.item}>✓ Video Stories up to {blue.data?.blue?.story_video_max_seconds||60} seconds</Text><Text style={styles.item}>✓ Up to {blue.data?.blue?.external_links_max||2} external profile links</Text></View>
+ </ScrollView></View>
+}
+const useStyles=makeStyles(c=>({root:{flex:1,backgroundColor:c.surface},header:{flexDirection:"row",alignItems:"center",justifyContent:"space-between",paddingHorizontal:spacing.md,paddingVertical:spacing.sm,borderBottomWidth:1,borderBottomColor:c.border},back:{width:40,height:40,alignItems:"center",justifyContent:"center"},title:{fontFamily:fonts.display,fontSize:18,color:c.onSurface},body:{padding:spacing.lg,gap:spacing.lg,paddingBottom:48},status:{flexDirection:"row",alignItems:"center",gap:spacing.md,padding:spacing.lg,backgroundColor:c.surfaceTertiary,borderRadius:radius.lg},card:{gap:spacing.md,padding:spacing.lg,borderWidth:1,borderColor:c.border,borderRadius:radius.lg,backgroundColor:c.surface},cardTitle:{fontFamily:fonts.display,fontSize:17,color:c.onSurface},sub:{fontFamily:fonts.regular,fontSize:13,lineHeight:19,color:c.onSurfaceSecondary},item:{fontFamily:fonts.medium,fontSize:14,color:c.onSurfaceSecondary}}));
