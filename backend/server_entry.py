@@ -9,6 +9,7 @@ from server import app, db, get_current_user, now_iso
 from group_routes import install_group_management_routes
 from profile_edit_routes import install_profile_edit_routes
 from blue_entitlement_routes import install_blue_entitlement_routes
+from blue_links_routes import install_blue_links_routes
 
 # server.py has already included its legacy /api router by this point. Install
 # modular routes directly on the FastAPI application using a tiny adapter that
@@ -29,22 +30,7 @@ class _ApiPrefixAdapter:
 
 _api = _ApiPrefixAdapter(app)
 
-install_group_management_routes(
-    _api,
-    db,
-    get_current_user,
-    now_iso,
-)
-
-install_profile_edit_routes(
-    _api,
-    db,
-    get_current_user,
-    now_iso,
-)
-
-install_blue_entitlement_routes(
-    _api,
-    db,
-    get_current_user,
-)
+install_group_management_routes(_api, db, get_current_user, now_iso)
+install_profile_edit_routes(_api, db, get_current_user, now_iso)
+install_blue_entitlement_routes(_api, db, get_current_user)
+install_blue_links_routes(_api, db, get_current_user, now_iso)
