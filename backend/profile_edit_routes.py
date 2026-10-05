@@ -1,6 +1,7 @@
 """Profile edit API enforcing Glint identity rules.
-Normal accounts may change their name once per 30 days. Verified accounts send
-name/avatar changes to admin review. Cover photos are never part of that rule.
+Normal accounts may change their name once per 30 days. Active Blue accounts
+send identity-sensitive name/avatar changes to admin review. Cover photos are
+never part of that rule.
 """
 from datetime import datetime, timezone
 from fastapi import Depends, HTTPException
@@ -27,10 +28,10 @@ def install_profile_edit_routes(api, db, get_current_user, now_iso):
         requested_name=body.full_name.strip() if body.full_name is not None else None
         name_changed=requested_name is not None and requested_name!=(user.get("full_name") or "")
         avatar_changed=body.avatar is not None and body.avatar!=user.get("avatar")
-        verified=blue_tick_active(user) or bool(user.get("verified"))
-        if verified and (name_changed or avatar_changed):
-            if name_changed and not body.name_evidence_url: raise HTTPException(400,"Supporting document is required for a verified name change")
-            if avatar_changed and not body.avatar_evidence_url: raise HTTPException(400,"Supporting document is required for a verified profile photo change")
+        blue_verified=blue_tick_active(user)
+        if blue_verified and (name_changed or avatar_changed):
+            if name_changed and not body.name_evidence_url: raise HTTPException(400,"Supporting document is required for a Blue verified name change")
+            if avatar_changed and not body.avatar_evidence_url: raise HTTPException(400,"Supporting document is required for a Blue verified profile photo change")
             pending={"user_id":me["id"],"requested_name":requested_name if name_changed else None,"requested_avatar":body.avatar if avatar_changed else None,"name_evidence_url":body.name_evidence_url if name_changed else None,"avatar_evidence_url":body.avatar_evidence_url if avatar_changed else None,"status":"pending","created_at":now_iso()}
             existing=await db.profile_change_reviews.find_one({"user_id":me["id"],"status":"pending"})
             if existing: await db.profile_change_reviews.update_one({"_id":existing["_id"]},{"$set":pending})
