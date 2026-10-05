@@ -9,24 +9,26 @@ import { api } from "@/src/api/client";
 import { PostCard } from "@/src/components/PostCard";
 import { Icon } from "@/src/components/Icon";
 
-export default function GoldenFeed() {
+// The route filename remains golden.tsx temporarily so existing navigation links
+// keep working during migration. The user-facing feature and API are Spotlight.
+export default function SpotlightFeed() {
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
-  const feed = useQuery({ queryKey: ["golden-feed"], queryFn: () => api.get("/posts/golden") });
+  const feed = useQuery({ queryKey: ["spotlight-feed"], queryFn: () => api.get("/posts/spotlight") });
   useFocusEffect(React.useCallback(() => { feed.refetch(); }, []));
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <LinearGradient colors={[colors.brandSecondary, colors.brandPrimary]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.iconBtn} testID="golden-back">
+        <Pressable onPress={() => router.back()} style={styles.iconBtn} testID="spotlight-back">
           <Icon name="chevron-back" size={26} color={colors.onBrandSecondary} />
         </Pressable>
         <View style={styles.headerCenter}>
-          <Text style={styles.title}>✨ Golden Feed</Text>
-          <Text style={styles.subtitle}>The most-loved posts of today&apos;s Golden Hour</Text>
+          <Text style={styles.title}>✨ Glint Spotlight</Text>
+          <Text style={styles.subtitle}>Discover standout posts from today&apos;s Spotlight window</Text>
         </View>
         <View style={{ width: 40 }} />
       </LinearGradient>
@@ -39,9 +41,7 @@ export default function GoldenFeed() {
           keyExtractor={(p) => p.id}
           renderItem={({ item, index }) => (
             <View style={{ paddingHorizontal: spacing.lg }}>
-              <View style={styles.rankRow}>
-                <Text style={styles.rank}>#{index + 1}</Text>
-              </View>
+              <View style={styles.rankRow}><Text style={styles.rank}>#{index + 1}</Text></View>
               <PostCard post={item} onChanged={() => feed.refetch()} />
             </View>
           )}
@@ -51,8 +51,8 @@ export default function GoldenFeed() {
           ListEmptyComponent={
             <View style={styles.empty}>
               <Icon name="sparkles-outline" size={56} color={colors.brandSecondary} />
-              <Text style={styles.emptyTitle}>No golden posts yet</Text>
-              <Text style={styles.emptyText}>Post during the daily Golden Hour to land here and shine!</Text>
+              <Text style={styles.emptyTitle}>No Spotlight posts yet</Text>
+              <Text style={styles.emptyText}>Post during the daily Spotlight window for a chance to appear here.</Text>
             </View>
           }
         />
