@@ -1,7 +1,7 @@
 """Glint Blue Tick entitlement rules.
 
-Paid subscriptions and admin-manual grants intentionally resolve to the same
-product capabilities so manual test accounts behave exactly like subscribers.
+Paid subscriptions and the existing admin Blue Tick grant resolve to the same
+product capabilities so admin test accounts behave like Blue subscribers.
 """
 from datetime import datetime, timezone
 from typing import Optional
@@ -23,17 +23,18 @@ def _parse_iso(value: Optional[str]):
         return None
 
 
+def _manual_blue(user: dict) -> bool:
+    # golden_tick is the field used by the existing production/admin dashboard.
+    # blue_tick_manual is retained for compatibility with upgrade-only test data.
+    return bool(user.get("golden_tick") or user.get("blue_tick_manual") or user.get("blue_manual_grant"))
+
+
 def blue_tick_active(user: dict) -> bool:
     """Return whether Blue Tick benefits are currently active for a user."""
     if not user:
         return False
-
-    # Manual admin grants are active until the admin removes them.
-    if bool(user.get("blue_tick_manual")):
+    if _manual_blue(user):
         return True
-
-    # Paid Blue Tick remains active through the paid entitlement end date,
-    # including when auto-renew has been cancelled mid-cycle.
     status = str(user.get("blue_subscription_status") or "").lower()
     if status not in {"active", "cancelled"}:
         return False
@@ -42,7 +43,7 @@ def blue_tick_active(user: dict) -> bool:
 
 
 def blue_tick_source(user: dict) -> Optional[str]:
-    if bool(user.get("blue_tick_manual")):
+    if _manual_blue(user):
         return "admin_manual"
     if blue_tick_active(user):
         return "subscription"
