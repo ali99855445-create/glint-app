@@ -1,7 +1,8 @@
 """Admin operations for Glint Blue Tick.
 
-These helpers make a manual admin grant behave like the paid Blue product for
-feature entitlement testing, while keeping subscription billing state separate.
+Manual admin Blue grants behave like the paid Blue product for entitlement
+testing while subscription billing state remains separate. Legacy Golden badge
+state is intentionally not read or written here.
 """
 from typing import Optional
 
@@ -15,9 +16,7 @@ async def set_manual_blue_tick(db, user_id: str, enabled: bool, reason: Optional
 
     update = {
         "blue_tick_manual": bool(enabled),
-        # Keep the existing badge field in sync so all current Glint screens
-        # continue rendering the same Blue badge while the migration is active.
-        "golden_tick": bool(enabled) or bool(user.get("blue_subscription_status") in {"active", "cancelled"}),
+        "blue_manual_grant": bool(enabled),
         "blue_tick_manual_reason": (reason or "").strip() or None,
     }
     await db.users.update_one({"id": user_id}, {"$set": update})
@@ -36,7 +35,7 @@ async def get_blue_tick_admin_state(db, user_id: str) -> dict:
         raise ValueError("User not found")
     return {
         "user_id": user_id,
-        "manual_blue_tick": bool(user.get("blue_tick_manual")),
+        "manual_blue_tick": bool(user.get("blue_tick_manual") or user.get("blue_manual_grant")),
         "subscription_status": user.get("blue_subscription_status"),
         "subscription_ends_at": user.get("blue_subscription_ends_at"),
         "entitlements": resolve_blue_entitlements(user),
