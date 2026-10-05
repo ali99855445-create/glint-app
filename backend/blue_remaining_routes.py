@@ -48,17 +48,17 @@ def install_blue_remaining_routes(api,db,get_current_user,now_iso):
     async def manual_blue(body:ManualBlueBody,me=Depends(get_current_user)):
         await require_admin(me); target=await db.users.find_one({"id":body.user_id})
         if not target: raise HTTPException(404,"User not found")
-        # Keep the existing production/admin badge field as the canonical manual
-        # Blue state, while mirroring the upgrade field for compatibility.
-        paid_active=target.get("blue_subscription_status")=="active"
+        # Blue is now independent from the retired Golden badge. Keep both
+        # explicit Blue admin fields synchronized for old/new admin clients.
         update={
-            "golden_tick":body.enabled,
+            "blue_tick_manual":body.enabled,
             "blue_manual_grant":body.enabled,
-            "verified":bool(body.enabled or paid_active),
             "blue_manual_updated_at":now_iso(),
         }
         await db.users.update_one({"id":body.user_id},{"$set":update})
-        return {"ok":True,"enabled":body.enabled,"verified":update["verified"],"source":"admin_manual" if body.enabled else None}
+        fresh=await db.users.find_one({"id":body.user_id})
+        ent=resolve_blue_entitlements(fresh or {})
+        return {"ok":True,"enabled":body.enabled,"blue":ent,"source":ent.get("source")}
 
     @api.post("/admin/profile-change/review")
     async def review_identity(body:ReviewBody,me=Depends(get_current_user)):
