@@ -1,7 +1,8 @@
 """Glint Blue Tick entitlement rules.
 
-Paid subscriptions and the existing admin Blue Tick grant resolve to the same
-product capabilities so admin test accounts behave like Blue subscribers.
+Blue Tick is the canonical verification product. Paid subscriptions and explicit
+admin Blue grants resolve to the same product capabilities. The retired legacy
+Golden badge is intentionally not used as a Blue entitlement source.
 """
 from datetime import datetime, timezone
 from typing import Optional
@@ -24,17 +25,12 @@ def _parse_iso(value: Optional[str]):
 
 
 def _manual_blue(user: dict) -> bool:
-    # golden_tick is the field used by the existing production/admin dashboard.
-    # blue_tick_manual is retained for compatibility with upgrade-only test data.
-    return bool(user.get("golden_tick") or user.get("blue_tick_manual") or user.get("blue_manual_grant"))
+    # Only explicit Blue admin fields count. golden_tick is a retired legacy
+    # field and must never unlock the new paid Blue product or its benefits.
+    return bool(user.get("blue_tick_manual") or user.get("blue_manual_grant"))
 
 
-def blue_tick_active(user: dict) -> bool:
-    """Return whether Blue Tick benefits are currently active for a user."""
-    if not user:
-        return False
-    if _manual_blue(user):
-        return True
+def _subscription_blue(user: dict) -> bool:
     status = str(user.get("blue_subscription_status") or "").lower()
     if status not in {"active", "cancelled"}:
         return False
@@ -42,10 +38,17 @@ def blue_tick_active(user: dict) -> bool:
     return bool(ends_at and ends_at > datetime.now(timezone.utc))
 
 
+def blue_tick_active(user: dict) -> bool:
+    """Return whether Blue Tick benefits are currently active for a user."""
+    if not user:
+        return False
+    return _manual_blue(user) or _subscription_blue(user)
+
+
 def blue_tick_source(user: dict) -> Optional[str]:
     if _manual_blue(user):
         return "admin_manual"
-    if blue_tick_active(user):
+    if _subscription_blue(user):
         return "subscription"
     return None
 
