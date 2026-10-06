@@ -2645,7 +2645,7 @@ class PlayPurchaseBody(BaseModel):
 
 @api.get("/blue/billing-config")
 async def blue_billing_config(me=Depends(get_current_user)):
-    return {"product_id": play_billing.PRODUCT_ID, "account_id": play_billing.account_id(me["id"])}
+    return {"product_id": play_billing.PRODUCT_ID if os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip() else None, "account_id": play_billing.account_id(me["id"])}
 
 
 @api.post("/blue/purchases/verify")
