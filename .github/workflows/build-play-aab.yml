@@ -25,6 +25,9 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Check signing regression fixtures
+        run: python -m unittest discover -s backend/tests -p test_release_signing.py
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -58,7 +61,9 @@ jobs:
           test -n "$GLINT_KEY_ALIAS" || { echo "Missing KEY_ALIAS secret"; exit 1; }
           test -n "$GLINT_KEY_PASSWORD" || { echo "Missing KEY_PASSWORD secret"; exit 1; }
           printf '%s' "$GLINT_UPLOAD_KEYSTORE_BASE64" | base64 --decode > frontend/android/app/glint-upload-key.jks
-          keytool -list -keystore frontend/android/app/glint-upload-key.jks -storepass "$GLINT_STORE_PASSWORD" -alias "$GLINT_KEY_ALIAS" >/dev/null
+          keytool -list -v -keystore frontend/android/app/glint-upload-key.jks -storepass "$GLINT_STORE_PASSWORD" -alias "$GLINT_KEY_ALIAS" > /tmp/upload-cert.txt
+          ACTUAL_SHA1=$(sed -n 's/.*SHA1: //p' /tmp/upload-cert.txt | head -n 1 | tr -d '\r')
+          test "$ACTUAL_SHA1" = '5F:F6:16:43:DD:48:5D:40:29:2A:FF:B7:6C:D1:8F:EF:5C:5C:3D:71' || { echo 'Configured upload keystore does not match the existing Play app'; exit 1; }
 
       - name: Configure release signing
         working-directory: frontend
@@ -107,9 +112,12 @@ jobs:
               raise SystemExit('Could not parse release block')
 
           block = s[rel:end]
-          block = block.replace('signingConfig signingConfigs.debug', 'signingConfig signingConfigs.release')
-          if 'signingConfig signingConfigs.release' not in block:
-              block = block.replace('        release {', '        release {\n            signingConfig signingConfigs.release', 1)
+          block, replacements = re.subn(
+              r'(?m)^([ \t]*)signingConfig[ \t]*(?:=[ \t]*)?signingConfigs\.(?:debug|release)[ \t]*$',
+              r'\1signingConfig = signingConfigs.release', block,
+          )
+          if replacements != 1:
+              raise SystemExit('Expected exactly one release signing assignment')
           s = s[:rel] + block + s[end:]
           p.write_text(s)
 
@@ -130,9 +138,9 @@ jobs:
           block = final[rel:end]
           print('--- buildTypes.release ---')
           print(block)
-          if 'signingConfig signingConfigs.debug' in block:
+          if re.search(r'signingConfig\s*(?:=\s*)?signingConfigs\.debug', block):
               raise SystemExit('ERROR: buildTypes.release still uses debug signing')
-          if 'signingConfig signingConfigs.release' not in block:
+          if not re.search(r'signingConfig\s*(?:=\s*)?signingConfigs\.release', block):
               raise SystemExit('ERROR: buildTypes.release is not using release signing')
           print('Release signing configuration OK')
           PY
