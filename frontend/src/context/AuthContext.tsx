@@ -9,6 +9,9 @@ export type User = {
   cover?: string | null;
   bio?: string | null;
   location?: string | null;
+  date_of_birth?: string | null;
+  country_code?: string | null;
+  sparks?: number;
   verified: boolean;
   privacy: string;
   email?: string | null;

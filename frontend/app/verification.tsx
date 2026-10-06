@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { View, Text, Pressable } from "react-native";
+import { useEffect, useState } from "react";
+import { View, Text, Pressable, Platform } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { Image } from "expo-image";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -15,6 +15,8 @@ import { useAuth } from "@/src/context/AuthContext";
 import { api, fileUrl } from "@/src/api/client";
 import { pickAndUploadImage, takeAndUploadSelfie } from "@/src/lib/media";
 
+import { useIAP, getAvailablePurchases } from "expo-iap";
+
 const BLUE_PRICES: Record<string,string>={SA:"SAR 19.99/month",AE:"AED 19.99/month",QA:"QAR 19.99/month",KW:"KWD 1.49/month",PK:"PKR 699/month",IN:"INR 199/month"};
 const BLUE_BENEFITS=[
   ["checkmark-circle","Blue badge everywhere","Your Blue Tick appears across supported Glint surfaces."],
@@ -28,21 +30,47 @@ export default function Verification() {
   const styles=useStyles(); const {colors}=useTheme(); const insets=useSafeAreaInsets(); const router=useRouter(); const toast=useToast(); const {user}=useAuth();
   const status=useQuery({queryKey:["verification"],queryFn:()=>api.get("/verification/me")});
   useFocusEffect(React.useCallback(()=>{status.refetch();},[]));
-  const [checkoutStarted,setCheckoutStarted]=useState(false);
+  const [buying,setBuying]=useState(false);
+  const billing=useQuery({queryKey:["blue-billing-config"],queryFn:()=>api.get("/blue/billing-config")});
+  const iap=useIAP({
+    onPurchaseSuccess: async purchase => {
+      if(purchase.productId!==billing.data?.product_id)return;
+      try {
+        if(!purchase.purchaseToken)throw new Error("Google Play did not return a purchase token");
+        await api.post("/blue/purchases/verify",{purchase_token:purchase.purchaseToken});
+        await iap.finishTransaction({purchase,isConsumable:false});
+        await status.refetch();
+        toast.show("Payment confirmed. Complete your identity review.","success");
+      }catch(e:any){toast.show(e.message||"Could not verify purchase. Restore to retry.","error");}
+      finally{setBuying(false);}
+    },
+    onPurchaseError: error => {setBuying(false);toast.show(error.message||"Purchase cancelled","error");},
+  });
+  useEffect(()=>{if(iap.connected&&billing.data?.product_id)iap.fetchProducts({skus:[billing.data.product_id],type:"subs"}).catch(()=>toast.show("Subscription is not available in Google Play yet","error"));},[iap.connected,billing.data?.product_id]);
   const [legalName,setLegalName]=useState(""); const [note,setNote]=useState(""); const [doc,setDoc]=useState<string|null>(null); const [selfie,setSelfie]=useState<string|null>(null); const [submitting,setSubmitting]=useState(false);
   const current=status.data?.status; const eligibility=status.data?.eligibility; const eligible=!!eligibility?.account_old_enough&&!!eligibility?.phone_verified;
   const country=String(status.data?.country_code||status.data?.country||user?.country_code||"SA").toUpperCase();
-  const price=BLUE_PRICES[country]||BLUE_PRICES.SA;
+  const product=iap.subscriptions.find(p=>p.id===billing.data?.product_id);
+  const price=product?.displayPrice ? `${product.displayPrice}/month` : (BLUE_PRICES[country]||BLUE_PRICES.SA);
   const paymentConfirmed=Boolean(status.data?.blue_payment_confirmed||status.data?.payment_confirmed||status.data?.subscription_paid);
-  const showIdentity=paymentConfirmed||checkoutStarted||current==="pending"||current==="approved"||current==="rejected";
+  const showIdentity=paymentConfirmed||current==="pending"||current==="approved"||current==="rejected";
 
   async function uploadDoc(){try{const r=await pickAndUploadImage({quality:.75});if(r?.denied)return toast.show("Photo permission needed","error");if(r?.url)setDoc(r.url);}catch(e:any){toast.show(e.message||"Upload failed","error")}}
   async function captureSelfie(){try{const r=await takeAndUploadSelfie(.75);if(r?.denied)return toast.show("Camera permission needed","error");if(r?.url)setSelfie(r.url);}catch(e:any){toast.show(e.message||"Selfie upload failed","error")}}
-  function continueToPayment(){
-    // Google Play Billing will replace this hand-off once the Play subscription
-    // product is configured. Identity review remains after successful payment.
-    setCheckoutStarted(true);
-    toast.show("Payment step will use Google Play Billing in the final build.","success");
+  async function continueToPayment(){
+    if(Platform.OS!=="android")return toast.show("Subscribe through the Glint Android app on Google Play","error");
+    if(!eligible)return toast.show("A verified phone and an account at least 2 months old are required","error");
+    if(!iap.connected||!product||!billing.data)return toast.show("Subscription is not available in Google Play yet","error");
+    const offer=product.subscriptionOffers?.find(o=>o.offerTokenAndroid && o.pricingPhasesAndroid?.pricingPhaseList.every(p=>p.billingPeriod==="P1M"));
+    if(!offer?.offerTokenAndroid)return toast.show("Monthly subscription plan is not available yet","error");
+    setBuying(true);
+    try{await iap.requestPurchase({type:"subs",request:{google:{skus:[product.id],subscriptionOffers:[{sku:product.id,offerToken:offer.offerTokenAndroid}],obfuscatedAccountId:billing.data.account_id}}});}
+    catch(e:any){setBuying(false);toast.show(e.message||"Unable to open Google Play payment","error");}
+  }
+  async function restorePayment(){
+    setBuying(true);
+    try{const purchases=await getAvailablePurchases();for(const purchase of purchases){if(purchase.productId===billing.data?.product_id&&purchase.purchaseToken){await api.post("/blue/purchases/verify",{purchase_token:purchase.purchaseToken});await iap.finishTransaction({purchase,isConsumable:false});await status.refetch();toast.show("Subscription restored","success");return;}}toast.show("No active Glint Blue subscription found","error");}
+    catch(e:any){toast.show(e.message||"Could not restore subscription","error");}finally{setBuying(false);}
   }
   async function submit(){if(!eligibility?.account_old_enough)return toast.show("Account must be at least 2 months old","error");if(!eligibility?.phone_verified)return toast.show("A verified phone number is required","error");if(!legalName.trim())return toast.show("Enter your full legal name","error");if(!doc)return toast.show("Upload an ID document","error");if(!selfie)return toast.show("Take a live selfie","error");setSubmitting(true);try{await api.post("/verification",{document:doc,selfie,full_legal_name:legalName.trim(),note:note.trim()||null});toast.show("Verification submitted!","success");status.refetch();}catch(e:any){toast.show(e.message,"error");}finally{setSubmitting(false)}}
   const StatusBanner=()=>{if(current==="pending")return <Banner icon="hourglass-outline" color={colors.warning} title="Under review" text="Your identity documents and live selfie are being reviewed."/>;if(current==="approved")return <Banner icon="checkmark-circle" color="#1877F2" title="You're verified!" text="Your Blue Tick and Blue benefits are active."/>;if(current==="rejected")return <Banner icon="close-circle" color={colors.error} title="Request declined" text="Your last verification request was declined."/>;return null};
@@ -50,7 +78,7 @@ export default function Verification() {
   return <View style={[styles.root,{paddingTop:insets.top}]}><View style={styles.header}><Pressable onPress={()=>router.back()} style={styles.iconBtn}><Icon name="chevron-back" size={26} color={colors.onSurface}/></Pressable><Text style={styles.title}>Blue Verification</Text><View style={{width:40}}/></View><KeyboardAwareScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" bottomOffset={20}>
     <View style={styles.hero}><View style={styles.profilePreview}><Avatar uri={user?.avatar} name={user?.full_name} size={72}/><View style={{alignItems:"center"}}><View style={styles.nameRow}><Text style={styles.profileName}>{user?.full_name||"Your profile"}</Text><BlueTick size={21}/></View><Text style={styles.previewLabel}>Preview of your Blue Tick</Text></View></View><Text style={styles.heroTitle}>Unlock Blue benefits</Text><Text style={styles.heroText}>Subscribe, confirm your identity, and get access after your verification is approved.</Text></View>
     <StatusBanner/>
-    {!showIdentity&&<><View style={styles.planCard}><View style={styles.planTop}><View><Text style={styles.planName}>Glint Blue</Text><Text style={styles.price}>{price}</Text></View><View style={styles.monthlyPill}><Text style={styles.monthlyText}>Monthly</Text></View></View><Text style={styles.small}>Subscription does not guarantee verification. Your identity must be approved before the Blue Tick and benefits activate.</Text></View><View style={styles.benefitsCard}><Text style={styles.cardTitle}>Your 5 Blue benefits</Text>{BLUE_BENEFITS.map(([icon,title,text])=><View style={styles.benefit} key={title}><View style={styles.benefitIcon}><Icon name={icon as any} size={20} color={colors.brand}/></View><View style={{flex:1}}><Text style={styles.benefitTitle}>{title}</Text><Text style={styles.benefitText}>{text}</Text></View></View>)}</View><Button title={`Continue · ${price}`} onPress={continueToPayment} testID="blue-continue-payment"/><Text style={styles.legal}>Payment will be processed through Google Play when billing is enabled. After successful payment, you will submit your ID and live selfie for review.</Text></>}
+    {!showIdentity&&<><View style={styles.planCard}><View style={styles.planTop}><View><Text style={styles.planName}>Glint Blue</Text><Text style={styles.price}>{price}</Text></View><View style={styles.monthlyPill}><Text style={styles.monthlyText}>Monthly</Text></View></View><Text style={styles.small}>Subscription does not guarantee verification. Your identity must be approved before the Blue Tick and benefits activate.</Text></View><View style={styles.benefitsCard}><Text style={styles.cardTitle}>Your 5 Blue benefits</Text>{BLUE_BENEFITS.map(([icon,title,text])=><View style={styles.benefit} key={title}><View style={styles.benefitIcon}><Icon name={icon as any} size={20} color={colors.brand}/></View><View style={{flex:1}}><Text style={styles.benefitTitle}>{title}</Text><Text style={styles.benefitText}>{text}</Text></View></View>)}</View><Button title={`Continue · ${price}`} onPress={continueToPayment} testID="blue-continue-payment" loading={buying}/><Button title="Restore purchase" variant="ghost" onPress={restorePayment} disabled={!iap.connected||buying}/><Text style={styles.legal}>Payment is processed through Google Play. Your subscription renews monthly until cancelled in Google Play. After successful payment, you will submit your ID and live selfie for review.</Text></>}
     {showIdentity&&<><View style={styles.rulesCard}><Text style={styles.cardTitle}>Identity verification</Text><Rule ok={!!eligibility?.account_old_enough} text={`Account at least 2 months old${eligibility?` · ${eligibility.account_age_days??0} days`:""}`}/><Rule ok={!!eligibility?.phone_verified} text="Phone number verified"/><Rule ok={!!doc} text="Government ID or official document"/><Rule ok={!!selfie} text="Live selfie taken in the app"/></View>{current!=="pending"&&current!=="approved"&&<>{!eligible&&<View style={styles.eligibilityNote}><Icon name="information-circle-outline" size={20} color={colors.onBrandTertiary}/><Text style={styles.eligibilityText}>Submission requires an account at least 2 months old and a verified phone number.</Text></View>}<Field value={legalName} onChangeText={setLegalName} placeholder="Full legal name" icon={<Icon name="person-outline" size={20} color={colors.muted}/>}/><Pressable style={styles.uploadCard} onPress={uploadDoc}>{doc?<Image source={{uri:fileUrl(doc)}} style={styles.uploadImage} contentFit="cover"/>:<><Icon name="document-text-outline" size={34} color={colors.brand}/><Text style={styles.uploadTitle}>Upload ID document</Text><Text style={styles.uploadSub}>Use a genuine, unaltered identity document belonging to you.</Text></>}</Pressable><Pressable style={styles.uploadCard} onPress={captureSelfie}>{selfie?<Image source={{uri:fileUrl(selfie)}} style={styles.uploadImage} contentFit="cover"/>:<><Icon name="camera-outline" size={34} color={colors.brand}/><Text style={styles.uploadTitle}>Take live selfie</Text><Text style={styles.uploadSub}>Camera capture only — use a clear, recent view of your face.</Text></>}</Pressable><Field value={note} onChangeText={setNote} placeholder="Anything we should know? (optional)" multiline/><Button title="Submit for review" onPress={submit} loading={submitting} disabled={!eligible}/><Text style={styles.legal}>Fake, forged, impersonation or AI-generated identity documents are prohibited. Repeated fraudulent submissions may restrict future verification applications.</Text></>}</>}
   </KeyboardAwareScrollView></View>;
 }

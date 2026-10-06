@@ -4,7 +4,7 @@ import { useVideoPlayer, VideoView } from "expo-video";
 import { fileUrl } from "@/src/api/client";
 
 export function StoryVideo({ uri, active = true }: { uri: string; active?: boolean }) {
-  const player = useVideoPlayer(fileUrl(uri), (p) => {
+  const player = useVideoPlayer(fileUrl(uri) || null, (p) => {
     p.loop = false;
     p.muted = false;
   });

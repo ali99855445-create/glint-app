@@ -32,7 +32,7 @@ def _manual_blue(user: dict) -> bool:
 
 def _subscription_blue(user: dict) -> bool:
     status = str(user.get("blue_subscription_status") or "").lower()
-    if status not in {"active", "cancelled"}:
+    if not user.get("blue_identity_approved") or status not in {"active", "cancelled"}:
         return False
     ends_at = _parse_iso(user.get("blue_subscription_ends_at"))
     return bool(ends_at and ends_at > datetime.now(timezone.utc))

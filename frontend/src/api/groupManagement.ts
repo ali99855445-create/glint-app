@@ -27,5 +27,5 @@ export async function setGroupAdmin(groupId: string, userId: string, admin: bool
 }
 
 export async function deleteGroup(groupId: string) {
-  return api.delete(`/chat/group/${groupId}`);
+  return api.del(`/chat/group/${groupId}`);
 }

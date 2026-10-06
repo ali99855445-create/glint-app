@@ -1,6 +1,8 @@
 name: Build Glint Play AAB
 
 on:
+  push:
+    branches: ["glint-final-upgrade"]
   workflow_dispatch:
 
 permissions:
@@ -33,6 +35,10 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm install --legacy-peer-deps
+
+      - name: Check TypeScript
+        working-directory: frontend
+        run: npx tsc --noEmit
 
       - name: Generate native Android project
         working-directory: frontend
@@ -129,7 +135,7 @@ jobs:
 
       - name: Build signed Android App Bundle
         working-directory: frontend/android
-        run: chmod +x gradlew && ./gradlew bundleRelease --no-daemon
+        run: chmod +x gradlew && ./gradlew bundleRelease assembleRelease --no-daemon
 
       - name: Verify AAB release certificate
         run: |
@@ -139,6 +145,9 @@ jobs:
           jarsigner -verify -verbose -certs "$AAB" >/dev/null
           keytool -printcert -jarfile "$AAB" > /tmp/aab-cert.txt
           cat /tmp/aab-cert.txt
+          EXPECTED_SHA1='5F:F6:16:43:DD:48:5D:40:29:2A:FF:B7:6C:D1:8F:EF:5C:5C:3D:71'
+          ACTUAL_SHA1=$(sed -n 's/.*SHA1: //p' /tmp/aab-cert.txt | head -n 1 | tr -d '\r')
+          test "$ACTUAL_SHA1" = "$EXPECTED_SHA1" || { echo 'ERROR: Upload certificate does not match the existing Play app.'; exit 1; }
           if grep -Eqi 'CN=Android Debug|Android Debug' /tmp/aab-cert.txt; then
             echo 'ERROR: AAB is signed with Android debug certificate; refusing to upload artifact.'
             exit 1
@@ -150,4 +159,20 @@ jobs:
         with:
           name: glint-play-aab-signed
           path: frontend/android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+      - name: Verify APK upload certificate
+        run: |
+          set -euo pipefail
+          APK=frontend/android/app/build/outputs/apk/release/app-release.apk
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+          "$APKSIGNER" verify --print-certs "$APK" > /tmp/apk-cert.txt
+          ACTUAL_SHA1=$(sed -n 's/Signer #1 certificate SHA-1 digest: //p' /tmp/apk-cert.txt | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          test "$ACTUAL_SHA1" = '5FF61643DD485D40292AFFB76CD18FEF5C5C3D71' || { echo 'APK upload certificate mismatch'; exit 1; }
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: glint-v1.0.15-apk-signed
+          path: frontend/android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
