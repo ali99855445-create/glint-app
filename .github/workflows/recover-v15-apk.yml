@@ -1,0 +1,68 @@
+name: Recover Glint v15 universal APK
+on:
+  push:
+    branches: ["glint-apk-recovery-v15"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      GLINT_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      GLINT_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      GLINT_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: actions/download-artifact@v4
+        with:
+          name: glint-play-aab-signed
+          run-id: 37527103471
+          github-token: ${{ github.token }}
+          path: bundle
+      - name: Verify source AAB and upload key
+        env:
+          GLINT_KEY_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          jarsigner -verify bundle/app-release.aab
+          keytool -printcert -jarfile bundle/app-release.aab > aab-cert.txt
+          cat aab-cert.txt
+          grep -F '5F:F6:16:43:DD:48:5D:40:29:2A:FF:B7:6C:D1:8F:EF:5C:5C:3D:71' aab-cert.txt
+          printf '%s' "$GLINT_KEY_BASE64" | base64 --decode > upload.jks
+          keytool -list -v -keystore upload.jks -storepass "$GLINT_STORE_PASSWORD" -alias "$GLINT_KEY_ALIAS" > key-cert.txt
+          grep -F '5F:F6:16:43:DD:48:5D:40:29:2A:FF:B7:6C:D1:8F:EF:5C:5C:3D:71' key-cert.txt
+      - name: Create signed universal APK from verified AAB
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar -o bundletool.jar
+          echo 'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  bundletool.jar' | sha256sum --check
+          printf '%s' "$GLINT_STORE_PASSWORD" > storepass.txt
+          printf '%s' "$GLINT_KEY_PASSWORD" > keypass.txt
+          chmod 600 upload.jks storepass.txt keypass.txt
+          java -jar bundletool.jar validate --bundle=bundle/app-release.aab
+          java -jar bundletool.jar dump manifest --bundle=bundle/app-release.aab --xpath=/manifest/@android:versionCode
+          java -jar bundletool.jar build-apks --bundle=bundle/app-release.aab --output=glint.apks --mode=universal --ks=upload.jks --ks-key-alias="$GLINT_KEY_ALIAS" --ks-pass=file:storepass.txt --key-pass=file:keypass.txt
+          unzip -p glint.apks universal.apk > Glint-v1.0.15.apk
+          rm -f upload.jks storepass.txt keypass.txt
+      - name: Verify APK signing certificate
+        run: |
+          set -euo pipefail
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+          "$APKSIGNER" verify --verbose --print-certs Glint-v1.0.15.apk > apk-cert.txt
+          cat apk-cert.txt
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          fingerprints = {x.replace(':','').upper() for x in re.findall(r'certificate SHA-1 digest:\s*([0-9a-fA-F:]+)', Path('apk-cert.txt').read_text())}
+          assert fingerprints == {'5FF61643DD485D40292AFFB76CD18FEF5C5C3D71'}, fingerprints
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: glint-v1.0.15-apk-signed
+          path: Glint-v1.0.15.apk
+          retention-days: 30
