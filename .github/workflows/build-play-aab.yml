@@ -179,8 +179,18 @@ jobs:
           APK=frontend/android/app/build/outputs/apk/release/app-release.apk
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
           "$APKSIGNER" verify --print-certs "$APK" > /tmp/apk-cert.txt
-          ACTUAL_SHA1=$(sed -n 's/Signer #1 certificate SHA-1 digest: //p' /tmp/apk-cert.txt | tr -d ':' | tr '[:lower:]' '[:upper:]')
-          test "$ACTUAL_SHA1" = '5FF61643DD485D40292AFFB76CD18FEF5C5C3D71' || { echo 'APK upload certificate mismatch'; exit 1; }
+          cat /tmp/apk-cert.txt
+          python - <<'PYVERIFY'
+          import re
+          from pathlib import Path
+          # New build-tools may include SDK range metadata before the signer number.
+          fingerprints = {x.replace(':', '').upper() for x in re.findall(
+              r'certificate SHA-1 digest:\s*([0-9a-fA-F:]+)',
+              Path('/tmp/apk-cert.txt').read_text(),
+          )}
+          if fingerprints != {'5FF61643DD485D40292AFFB76CD18FEF5C5C3D71'}:
+              raise SystemExit(f'APK upload certificate mismatch: {fingerprints}')
+          PYVERIFY
 
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
