@@ -26,6 +26,10 @@ import jwt
 import bcrypt
 
 import storage_helper
+import play_billing
+from blue_profile_policy import normal_name_change_allowed
+from blue_tick_admin import set_manual_blue_tick
+from blue_verification_policy import assert_blue_application_allowed
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -406,6 +410,20 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
     if suspension:
         until_text = f" Until: {suspension['until']}." if suspension.get("until") else ""
         raise HTTPException(403, f"Account suspended. Reason: {suspension['reason']}.{until_text}")
+    if user.get("blue_purchase_token"):
+        checked = parse_iso_datetime(user.get("blue_subscription_checked_at"))
+        if not checked or now_dt() - checked > timedelta(minutes=5):
+            try:
+                result = await run_in_threadpool(play_billing.verify_subscription, user["blue_purchase_token"], user["id"])
+                fields = {"blue_subscription_status": "active", "blue_subscription_ends_at": result["ends_at"], "blue_subscription_auto_renew": result["auto_renew"], "blue_subscription_checked_at": now_iso()}
+            except ValueError:
+                fields = {"blue_subscription_status": "inactive", "blue_subscription_checked_at": now_iso()}
+            except Exception:
+                # A network/configuration failure cannot grant paid access.
+                fields = {"blue_subscription_status": "unavailable"}
+            user.update(fields)
+            if fields["blue_subscription_status"] != "unavailable":
+                await db.users.update_one({"id": user["id"]}, {"$set": fields})
     return user
 
 
@@ -463,8 +481,10 @@ def public_user(u: dict) -> dict:
         "avatar": u.get("avatar"),
         "cover": u.get("cover"),
         "bio": u.get("bio"),
+        "external_links": u.get("external_links", []) if play_billing.blue_active(u) else [],
         "location": u.get("location"),
-        "verified": u.get("golden_tick", False),
+        "verified": play_billing.blue_active(u),
+        "blue_tick_active": play_billing.blue_active(u),
         "privacy": u.get("privacy", "public"),
         "created_at": u.get("created_at"),
     }
@@ -989,6 +1009,7 @@ async def get_me(me=Depends(get_current_user)):
             )
         ),
         "sparks": me.get("sparks", 0),
+        "date_of_birth": me.get("date_of_birth"),
         "inner_circle_count": len(me.get("inner_circle", [])),
         "counts": {
             "saved": saved,
@@ -1009,6 +1030,13 @@ async def update_me(body: ProfileUpdate, me=Depends(get_current_user)):
         raise HTTPException(400, "Invalid profile privacy")
     if "contact_visibility" in update and update["contact_visibility"] not in {"public", "friends", "only_me"}:
         raise HTTPException(400, "Invalid personal information visibility")
+    if play_billing.blue_active(me) and any(k in update and update[k] != me.get(k) for k in ("full_name", "avatar")):
+        raise HTTPException(400, "Verified identity changes must use the profile review form")
+    if "full_name" in update and update["full_name"] != me.get("full_name"):
+        cooldown = normal_name_change_allowed(me)
+        if not cooldown["allowed"]:
+            raise HTTPException(409, "Name can only be changed once every 30 days")
+        update["name_changed_at"] = now_iso()
     if update:
         await db.users.update_one({"id": me["id"]}, {"$set": update})
     fresh = await db.users.find_one({"id": me["id"]}, {"_id": 0})
@@ -1421,6 +1449,7 @@ async def get_feed(me=Depends(get_current_user)):
     return out
 
 
+@api.get("/posts/spotlight")
 @api.get("/posts/golden")
 async def golden_feed(me=Depends(get_current_user)):
     friend_ids = {me["id"]}
@@ -1738,6 +1767,8 @@ async def create_story(body: StoryCreate, me=Depends(get_current_user)):
     if not await app_feature_enabled("stories_enabled", True):
         raise HTTPException(503, "Stories are temporarily unavailable.")
     await ensure_not_restricted(me, "posting_restricted_until", "Story posting")
+    if body.type == "video" and (not play_billing.blue_active(me) or not body.duration or not 0 < body.duration <= 60):
+        raise HTTPException(403, "Video Stories require Blue Tick and a maximum duration of 60 seconds")
     doc = {
         "id": new_id(),
         "author_id": me["id"],
@@ -2572,9 +2603,12 @@ async def submit_verification(body: VerificationSubmit, me=Depends(get_current_u
     existing = await db.verifications.find_one({"user_id": me["id"], "status": "pending"})
     if existing:
         raise HTTPException(400, "You already have a pending request")
-    if me.get("golden_tick"):
+    if play_billing.blue_active(me):
         raise HTTPException(400, "You are already verified")
 
+    assert_blue_application_allowed(me)
+    if not play_billing.payment_active(me):
+        raise HTTPException(402, "An active Google Play subscription is required before applying")
     eligibility = verification_eligibility(me)
     if not eligibility["account_old_enough"]:
         raise HTTPException(400, "Account must be at least 2 months old")
@@ -2600,7 +2634,187 @@ async def my_verification(me=Depends(get_current_user)):
     v = await db.verifications.find_one({"user_id": me["id"]}, {"_id": 0}, sort=[("created_at", -1)])
     payload = v or {"status": "none"}
     payload["eligibility"] = verification_eligibility(me)
+    payload["blue_payment_confirmed"] = play_billing.payment_active(me)
     return payload
+
+
+class PlayPurchaseBody(BaseModel):
+    purchase_token: str = Field(min_length=1, max_length=4096)
+
+
+@api.get("/blue/billing-config")
+async def blue_billing_config(me=Depends(get_current_user)):
+    return {"product_id": play_billing.PRODUCT_ID, "account_id": play_billing.account_id(me["id"])}
+
+
+@api.post("/blue/purchases/verify")
+async def blue_verify_purchase(body: PlayPurchaseBody, me=Depends(get_current_user)):
+    try:
+        result = await run_in_threadpool(play_billing.verify_subscription, body.purchase_token, me["id"])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception:
+        raise HTTPException(503, "Purchase verification is temporarily unavailable. Restore your purchase to retry.")
+    await db.users.update_one({"id": me["id"]}, {"$set": {
+        "blue_subscription_status": "active", "blue_subscription_ends_at": result["ends_at"],
+        "blue_subscription_auto_renew": result["auto_renew"],
+        "blue_purchase_token": body.purchase_token, "blue_subscription_checked_at": now_iso(),
+    }})
+    return {"ok": True, "payment_confirmed": True}
+
+
+@api.get("/blue/entitlements")
+async def blue_entitlements(me=Depends(get_current_user)):
+    active = play_billing.blue_active(me)
+    return {"ok": True, "blue": {
+        "active": active, "source": ("admin_manual" if me.get("blue_tick_manual") or me.get("blue_manual_grant") else "subscription") if active else None,
+        **{key: active for key in ("badge_everywhere", "impersonation_protection", "priority_support", "video_stories", "external_links")},
+        "story_video_max_seconds": 60 if active else 0, "external_links_max": 2 if active else 0,
+    }, "subscription": {"status": "active" if play_billing.payment_active(me) else "inactive",
+        "ends_at": me.get("blue_subscription_ends_at"), "auto_renew": bool(me.get("blue_subscription_auto_renew"))}}
+
+
+class ExternalLink(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class ExternalLinksBody(BaseModel):
+    links: List[ExternalLink] = Field(max_length=2)
+
+
+async def require_blue(me=Depends(get_current_user)):
+    if not play_billing.blue_active(me):
+        raise HTTPException(403, "An active Blue Tick is required")
+    return me
+
+
+@api.get("/profile/external-links")
+async def get_external_links(me=Depends(get_current_user)):
+    return {"links": me.get("external_links", [])}
+
+
+@api.post("/profile/external-links")
+async def save_external_links(body: ExternalLinksBody, me=Depends(require_blue)):
+    for link in body.links:
+        parsed = urllib.parse.urlparse(link.url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise HTTPException(400, "Use a valid HTTPS web address")
+    await db.users.update_one({"id": me["id"]}, {"$set": {"external_links": [x.model_dump() for x in body.links]}})
+    return {"ok": True}
+
+
+class BlueSupportBody(BaseModel):
+    subject: str = Field(min_length=1, max_length=200)
+    message: str = Field(min_length=1, max_length=10000)
+
+
+@api.post("/blue/support")
+async def blue_support(body: BlueSupportBody, me=Depends(require_blue)):
+    result = await create_ticket(TicketCreate(subject=body.subject, description=body.message), me)
+    await db.tickets.update_one({"id": result["id"]}, {"$set": {"priority": "blue"}})
+    return result
+
+
+class ImpersonationBody(BaseModel):
+    reported_user_id: str
+    details: Optional[str] = Field(default=None, max_length=10000)
+
+
+@api.post("/blue/impersonation-report")
+async def blue_impersonation(body: ImpersonationBody, me=Depends(require_blue)):
+    if body.reported_user_id == me["id"] or not await db.users.find_one({"id": body.reported_user_id, "deleted_at": None}):
+        raise HTTPException(400, "Choose a valid account to report")
+    await db.reports.insert_one({"id": new_id(), "reporter_id": me["id"], "target_type": "user", "target_id": body.reported_user_id, "reason": "impersonation", "details": body.details, "priority": "blue", "status": "open", "created_at": now_iso()})
+    return {"ok": True}
+
+
+class ProfileEditV2(ProfileUpdate):
+    date_of_birth: Optional[str] = None
+    name_evidence_url: Optional[str] = None
+    avatar_evidence_url: Optional[str] = None
+
+
+@api.post("/profile/edit-v2")
+async def profile_edit_v2(body: ProfileEditV2, me=Depends(get_current_user)):
+    update = body.model_dump(exclude_unset=True, exclude={"name_evidence_url", "avatar_evidence_url"})
+    if "full_name" in update and not (update["full_name"] or "").strip():
+        raise HTTPException(400, "Name cannot be empty")
+    if update.get("date_of_birth"):
+        try:
+            datetime.strptime(update["date_of_birth"], "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, "Use a valid YYYY-MM-DD date")
+    changes = {k: update[k] for k in ("full_name", "avatar") if k in update and update[k] != me.get(k)}
+    review_id = None
+    if play_billing.blue_active(me) and changes:
+        for key in changes:
+            evidence = body.name_evidence_url if key == "full_name" else body.avatar_evidence_url
+            if not evidence:
+                raise HTTPException(400, "Supporting evidence is required for verified identity changes")
+            file_path = urllib.parse.urlparse(evidence).path.removeprefix("/api/files/")
+            if not await db.files.find_one({"path": file_path, "owner_id": me["id"]}):
+                raise HTTPException(400, "Upload your own supporting evidence")
+        review_id = new_id()
+        await db.profile_reviews.insert_one({"id": review_id, "user_id": me["id"], "changes": changes, "name_evidence_url": body.name_evidence_url, "avatar_evidence_url": body.avatar_evidence_url, "status": "pending", "created_at": now_iso()})
+        for key in changes:
+            update.pop(key)
+    if update:
+        await update_me(ProfileUpdate(**{k: v for k, v in update.items() if k != "date_of_birth"}), me)
+        if "date_of_birth" in update:
+            await db.users.update_one({"id": me["id"]}, {"$set": {"date_of_birth": update["date_of_birth"]}})
+    return {"ok": True, "identity_review_required": bool(review_id), "review_id": review_id}
+
+
+class ManualBlueBody(BaseModel):
+    user_id: str
+    enabled: bool
+
+
+@api.post("/admin/blue/manual")
+async def manual_blue(body: ManualBlueBody, admin=Depends(require_messenger_admin)):
+    user = await db.users.find_one({"id": body.user_id, "deleted_at": None})
+    if not user:
+        raise HTTPException(404, "User not found")
+    await set_manual_blue_tick(db, body.user_id, body.enabled)
+    paid = bool(user.get("blue_identity_approved")) and play_billing.payment_active(user)
+    await db.users.update_one({"id": body.user_id}, {"$set": {"golden_tick": body.enabled or paid, "blue_tick_manual": body.enabled, "blue_source": "admin_manual" if body.enabled else "subscription" if paid else None}})
+    await admin_audit("manual_blue", "user", body.user_id, "Manual Blue grant updated", body.user_id)
+    return {"ok": True}
+
+
+class ProfileReviewBody(BaseModel):
+    review_id: str
+    decision: str
+    note: Optional[str] = None
+
+
+@api.post("/admin/profile-change/review")
+async def review_profile_change(body: ProfileReviewBody, admin=Depends(require_messenger_admin)):
+    if body.decision not in {"approved", "rejected"}:
+        raise HTTPException(400, "Invalid decision")
+    review = await db.profile_reviews.find_one_and_update({"id": body.review_id, "status": "pending"}, {"$set": {"status": body.decision, "reviewed_at": now_iso(), "note": body.note}})
+    if not review:
+        raise HTTPException(404, "Pending review not found")
+    if body.decision == "approved":
+        await db.users.update_one({"id": review["user_id"], "deleted_at": None}, {"$set": review["changes"]})
+    await admin_notify(review["user_id"], f"Your profile change was {body.decision}.")
+    return {"ok": True}
+
+
+class VideoStoryBody(BaseModel):
+    media: str
+    duration: float = Field(gt=0, le=60)
+    caption: Optional[str] = Field(default=None, max_length=120)
+    audience: str = "friends"
+
+
+@api.post("/stories/video")
+async def blue_video_story(body: VideoStoryBody, me=Depends(require_blue)):
+    path = urllib.parse.urlparse(body.media).path.removeprefix("/api/files/")
+    if not await db.files.find_one({"path": path, "owner_id": me["id"], "content_type": {"$regex": "^video/"}}):
+        raise HTTPException(400, "Upload your own video first")
+    return await create_story(StoryCreate(type="video", media=body.media, duration=body.duration, text=body.caption, audience=body.audience), me)
 
 
 # ----------------------------- help center -----------------------------
@@ -2746,9 +2960,12 @@ async def approve_verification(vid: str, body: AdminReasonBody = AdminReasonBody
     v = await db.verifications.find_one({"id": vid})
     if not v:
         raise HTTPException(404, "Not found")
+    applicant = await db.users.find_one({"id": v["user_id"]})
+    if not applicant or not play_billing.payment_active(applicant):
+        raise HTTPException(402, "Applicant needs an active Google Play subscription")
     reason = (body.reason or "Identity verification approved").strip()
     await db.verifications.update_one({"id": vid}, {"$set": {"status": "approved", "review_reason": reason, "reviewed_at": now_iso()}})
-    await db.users.update_one({"id": v["user_id"]}, {"$set": {"golden_tick": True}})
+    await db.users.update_one({"id": v["user_id"]}, {"$set": {"golden_tick": True, "blue_source": "subscription", "blue_identity_approved": True}})
     await admin_notify(v["user_id"], f"Your Blue Tick verification was approved. Reason: {reason}")
     await admin_audit("approve_verification", "verification", vid, reason, v["user_id"])
     return {"ok": True}
@@ -3048,7 +3265,8 @@ async def admin_blue_tick(user_id: str, body: AdminBlueTickBody, _=Depends(requi
     if not u:
         raise HTTPException(404, "User not found")
     reason = (body.reason or ("Approved by Glint admin" if body.verified else "Verification removed by Glint admin")).strip()
-    await db.users.update_one({"id": user_id}, {"$set": {"golden_tick": body.verified}})
+    await set_manual_blue_tick(db, user_id, body.verified, reason)
+    await db.users.update_one({"id": user_id}, {"$set": {"golden_tick": body.verified, "blue_tick_manual": body.verified, "blue_source": "admin_manual" if body.verified else None}})
     if body.verified:
         notice = f"Your account has been granted the Glint Blue Tick. Reason: {reason}"
         action = "grant_blue_tick"
@@ -3885,6 +4103,8 @@ async def request_data_deletion(
     )
 
 
+from group_routes import install_group_management_routes
+install_group_management_routes(api, db, get_current_user, now_iso)
 app.include_router(api)
 
 app.add_middleware(
