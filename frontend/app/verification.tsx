@@ -27,7 +27,7 @@ const BLUE_BENEFITS=[
 ];
 
 export default function Verification() {
-  const styles=useStyles(); const {colors}=useTheme(); const insets=useSafeAreaInsets(); const router=useRouter(); const toast=useToast(); const {user}=useAuth();
+  const styles=useStyles(); const {colors}=useTheme(); const insets=useSafeAreaInsets(); const router=useRouter(); const toast=useToast(); const {user,refresh}=useAuth();
   const status=useQuery({queryKey:["verification",user?.id],queryFn:()=>api.get("/verification/me")});
   useFocusEffect(React.useCallback(()=>{status.refetch();},[]));
   const [buying,setBuying]=useState(false);
@@ -39,8 +39,9 @@ export default function Verification() {
         if(!purchase.purchaseToken)throw new Error("Google Play did not return a purchase token");
         await api.post("/blue/purchases/verify",{purchase_token:purchase.purchaseToken});
         await iap.finishTransaction({purchase,isConsumable:false});
-        await status.refetch();
-        toast.show("Payment confirmed. Complete your identity review.","success");
+        const refreshed=await status.refetch();
+        await refresh();
+        toast.show(refreshed.data?.blue_active?"Your Blue subscription is active.":"Payment confirmed. Complete your identity review.","success");
       }catch(e:any){toast.show(e.message||"Could not verify purchase. Restore to retry.","error");}
       finally{setBuying(false);}
     },
@@ -48,12 +49,12 @@ export default function Verification() {
   });
   useEffect(()=>{if(iap.connected&&billing.data?.product_id)iap.fetchProducts({skus:[billing.data.product_id],type:"subs"}).catch(()=>toast.show("Subscription is not available in Google Play yet","error"));},[iap.connected,billing.data?.product_id]);
   const [legalName,setLegalName]=useState(""); const [note,setNote]=useState(""); const [doc,setDoc]=useState<string|null>(null); const [selfie,setSelfie]=useState<string|null>(null); const [submitting,setSubmitting]=useState(false);
-  const current=status.data?.status; const eligibility=status.data?.eligibility; const eligible=!!eligibility?.account_old_enough&&!!eligibility?.phone_verified;
+  const current=status.data?.blue_active?"approved":status.data?.status; const eligibility=status.data?.eligibility; const eligible=!!eligibility?.account_old_enough&&!!eligibility?.phone_verified;
   const country=String(status.data?.country_code||status.data?.country||user?.country_code||"SA").toUpperCase();
   const product=iap.subscriptions.find(p=>p.id===billing.data?.product_id);
   const price=product?.displayPrice ? `${product.displayPrice}/month` : (BLUE_PRICES[country]||BLUE_PRICES.SA);
   const paymentConfirmed=Boolean(status.data?.blue_payment_confirmed||status.data?.payment_confirmed||status.data?.subscription_paid);
-  const showIdentity=paymentConfirmed||current==="pending"||current==="approved"||current==="rejected";
+  const showIdentity=paymentConfirmed||Boolean(status.data?.blue_active);
 
   async function uploadDoc(){try{const r=await pickAndUploadImage({quality:.75});if(r?.denied)return toast.show("Photo permission needed","error");if(r?.url)setDoc(r.url);}catch(e:any){toast.show(e.message||"Upload failed","error")}}
   async function captureSelfie(){try{const r=await takeAndUploadSelfie(.75);if(r?.denied)return toast.show("Camera permission needed","error");if(r?.url)setSelfie(r.url);}catch(e:any){toast.show(e.message||"Selfie upload failed","error")}}
@@ -69,11 +70,11 @@ export default function Verification() {
   }
   async function restorePayment(){
     setBuying(true);
-    try{const purchases=await getAvailablePurchases();for(const purchase of purchases){if(purchase.productId===billing.data?.product_id&&purchase.purchaseToken){await api.post("/blue/purchases/verify",{purchase_token:purchase.purchaseToken});await iap.finishTransaction({purchase,isConsumable:false});await status.refetch();toast.show("Subscription restored","success");return;}}toast.show("No active Glint Blue subscription found","error");}
+    try{const purchases=await getAvailablePurchases();for(const purchase of purchases){if(purchase.productId===billing.data?.product_id&&purchase.purchaseToken){await api.post("/blue/purchases/verify",{purchase_token:purchase.purchaseToken});await iap.finishTransaction({purchase,isConsumable:false});await status.refetch();await refresh();toast.show("Subscription restored","success");return;}}toast.show("No active Glint Blue subscription found","error");}
     catch(e:any){toast.show(e.message||"Could not restore subscription","error");}finally{setBuying(false);}
   }
   async function submit(){if(!eligibility?.account_old_enough)return toast.show("Account must be at least 2 months old","error");if(!eligibility?.phone_verified)return toast.show("A verified phone number is required","error");if(!legalName.trim())return toast.show("Enter your full legal name","error");if(!doc)return toast.show("Upload an ID document","error");if(!selfie)return toast.show("Take a live selfie","error");setSubmitting(true);try{await api.post("/verification",{document:doc,selfie,full_legal_name:legalName.trim(),note:note.trim()||null});toast.show("Verification submitted!","success");status.refetch();}catch(e:any){toast.show(e.message,"error");}finally{setSubmitting(false)}}
-  const StatusBanner=()=>{if(current==="pending")return <Banner icon="hourglass-outline" color={colors.warning} title="Under review" text="Your identity documents and live selfie are being reviewed."/>;if(current==="approved")return <Banner icon="checkmark-circle" color="#1877F2" title="You're verified!" text="Your Blue Tick and Blue benefits are active."/>;if(current==="rejected")return <Banner icon="close-circle" color={colors.error} title="Request declined" text="Your last verification request was declined."/>;return null};
+  const StatusBanner=()=>{if(current==="pending")return <Banner icon="hourglass-outline" color={colors.warning} title="Under review" text="Your identity documents and live selfie are being reviewed."/>;if(current==="approved"&&!status.data?.blue_active)return <Banner icon="refresh-circle" color={colors.warning} title="Subscription inactive" text="Renew or restore your subscription to reactivate your approved Blue Tick."/>;if(current==="approved")return <Banner icon="checkmark-circle" color="#1877F2" title="You're verified!" text="Your Blue Tick and Blue benefits are active."/>;if(current==="rejected")return <Banner icon="close-circle" color={colors.error} title="Request declined" text="Your last verification request was declined."/>;return null};
 
   return <View style={[styles.root,{paddingTop:insets.top}]}><View style={styles.header}><Pressable onPress={()=>router.back()} style={styles.iconBtn}><Icon name="chevron-back" size={26} color={colors.onSurface}/></Pressable><Text style={styles.title}>Blue Verification</Text><View style={{width:40}}/></View><KeyboardAwareScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" bottomOffset={20}>
     <View style={styles.hero}><View style={styles.profilePreview}><Avatar uri={user?.avatar} name={user?.full_name} size={72}/><View style={{alignItems:"center"}}><View style={styles.nameRow}><Text style={styles.profileName}>{user?.full_name||"Your profile"}</Text><BlueTick size={21}/></View><Text style={styles.previewLabel}>Preview of your Blue Tick</Text></View></View><Text style={styles.heroTitle}>Unlock Blue benefits</Text><Text style={styles.heroText}>Subscribe, confirm your identity, and get access after your verification is approved.</Text></View>

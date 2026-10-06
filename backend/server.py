@@ -2635,6 +2635,7 @@ async def my_verification(me=Depends(get_current_user)):
     payload = v or {"status": "none"}
     payload["eligibility"] = verification_eligibility(me)
     payload["blue_payment_confirmed"] = play_billing.payment_active(me)
+    payload["blue_active"] = play_billing.blue_active(me)
     return payload
 
 
