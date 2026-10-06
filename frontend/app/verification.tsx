@@ -28,10 +28,10 @@ const BLUE_BENEFITS=[
 
 export default function Verification() {
   const styles=useStyles(); const {colors}=useTheme(); const insets=useSafeAreaInsets(); const router=useRouter(); const toast=useToast(); const {user}=useAuth();
-  const status=useQuery({queryKey:["verification"],queryFn:()=>api.get("/verification/me")});
+  const status=useQuery({queryKey:["verification",user?.id],queryFn:()=>api.get("/verification/me")});
   useFocusEffect(React.useCallback(()=>{status.refetch();},[]));
   const [buying,setBuying]=useState(false);
-  const billing=useQuery({queryKey:["blue-billing-config"],queryFn:()=>api.get("/blue/billing-config")});
+  const billing=useQuery({queryKey:["blue-billing-config",user?.id],queryFn:()=>api.get("/blue/billing-config")});
   const iap=useIAP({
     onPurchaseSuccess: async purchase => {
       if(purchase.productId!==billing.data?.product_id)return;

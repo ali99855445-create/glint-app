@@ -5,6 +5,10 @@ on:
     branches: ["glint-final-upgrade"]
   workflow_dispatch:
 
+concurrency:
+  group: glint-signed-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

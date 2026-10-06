@@ -27,6 +27,9 @@ import bcrypt
 
 import storage_helper
 import play_billing
+from blue_profile_policy import normal_name_change_allowed
+from blue_tick_admin import set_manual_blue_tick
+from blue_verification_policy import assert_blue_application_allowed
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -1029,6 +1032,11 @@ async def update_me(body: ProfileUpdate, me=Depends(get_current_user)):
         raise HTTPException(400, "Invalid personal information visibility")
     if play_billing.blue_active(me) and any(k in update and update[k] != me.get(k) for k in ("full_name", "avatar")):
         raise HTTPException(400, "Verified identity changes must use the profile review form")
+    if "full_name" in update and update["full_name"] != me.get("full_name"):
+        cooldown = normal_name_change_allowed(me)
+        if not cooldown["allowed"]:
+            raise HTTPException(409, "Name can only be changed once every 30 days")
+        update["name_changed_at"] = now_iso()
     if update:
         await db.users.update_one({"id": me["id"]}, {"$set": update})
     fresh = await db.users.find_one({"id": me["id"]}, {"_id": 0})
@@ -2598,6 +2606,7 @@ async def submit_verification(body: VerificationSubmit, me=Depends(get_current_u
     if play_billing.blue_active(me):
         raise HTTPException(400, "You are already verified")
 
+    assert_blue_application_allowed(me)
     if not play_billing.payment_active(me):
         raise HTTPException(402, "An active Google Play subscription is required before applying")
     eligibility = verification_eligibility(me)
@@ -2743,7 +2752,7 @@ async def profile_edit_v2(body: ProfileEditV2, me=Depends(get_current_user)):
             evidence = body.name_evidence_url if key == "full_name" else body.avatar_evidence_url
             if not evidence:
                 raise HTTPException(400, "Supporting evidence is required for verified identity changes")
-            file_path = evidence.removeprefix("/api/files/")
+            file_path = urllib.parse.urlparse(evidence).path.removeprefix("/api/files/")
             if not await db.files.find_one({"path": file_path, "owner_id": me["id"]}):
                 raise HTTPException(400, "Upload your own supporting evidence")
         review_id = new_id()
@@ -2767,6 +2776,7 @@ async def manual_blue(body: ManualBlueBody, admin=Depends(require_messenger_admi
     user = await db.users.find_one({"id": body.user_id, "deleted_at": None})
     if not user:
         raise HTTPException(404, "User not found")
+    await set_manual_blue_tick(db, body.user_id, body.enabled)
     paid = bool(user.get("blue_identity_approved")) and play_billing.payment_active(user)
     await db.users.update_one({"id": body.user_id}, {"$set": {"golden_tick": body.enabled or paid, "blue_tick_manual": body.enabled, "blue_source": "admin_manual" if body.enabled else "subscription" if paid else None}})
     await admin_audit("manual_blue", "user", body.user_id, "Manual Blue grant updated", body.user_id)
@@ -2801,7 +2811,7 @@ class VideoStoryBody(BaseModel):
 
 @api.post("/stories/video")
 async def blue_video_story(body: VideoStoryBody, me=Depends(require_blue)):
-    path = body.media.removeprefix("/api/files/")
+    path = urllib.parse.urlparse(body.media).path.removeprefix("/api/files/")
     if not await db.files.find_one({"path": path, "owner_id": me["id"], "content_type": {"$regex": "^video/"}}):
         raise HTTPException(400, "Upload your own video first")
     return await create_story(StoryCreate(type="video", media=body.media, duration=body.duration, text=body.caption, audience=body.audience), me)
@@ -3255,6 +3265,7 @@ async def admin_blue_tick(user_id: str, body: AdminBlueTickBody, _=Depends(requi
     if not u:
         raise HTTPException(404, "User not found")
     reason = (body.reason or ("Approved by Glint admin" if body.verified else "Verification removed by Glint admin")).strip()
+    await set_manual_blue_tick(db, user_id, body.verified, reason)
     await db.users.update_one({"id": user_id}, {"$set": {"golden_tick": body.verified, "blue_tick_manual": body.verified, "blue_source": "admin_manual" if body.verified else None}})
     if body.verified:
         notice = f"Your account has been granted the Glint Blue Tick. Reason: {reason}"
@@ -4092,6 +4103,8 @@ async def request_data_deletion(
     )
 
 
+from group_routes import install_group_management_routes
+install_group_management_routes(api, db, get_current_user, now_iso)
 app.include_router(api)
 
 app.add_middleware(

@@ -1,3 +1,4 @@
+import { useAuth } from "@/src/context/AuthContext";
 import { useQuery } from "@tanstack/react-query";
 import { getMyBlueEntitlements } from "@/src/api/blueTick";
 
@@ -7,8 +8,10 @@ import { getMyBlueEntitlements } from "@/src/api/blueTick";
  * expiry refresh consistently across profile, stories, links and support.
  */
 export function useBlueEntitlements() {
+  const { user } = useAuth();
   return useQuery({
-    queryKey: ["blue-entitlements"],
+    queryKey: ["blue-entitlements", user?.id],
+    enabled: Boolean(user?.id),
     queryFn: getMyBlueEntitlements,
     staleTime: 30_000,
     refetchOnMount: true,
