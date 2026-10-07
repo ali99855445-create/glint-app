@@ -72,3 +72,20 @@ class ReleaseApiTests(IsolatedAsyncioTestCase):
             result=await server.submit_verification(server.VerificationSubmit(document='/api/files/id.jpg',selfie='/api/files/selfie.jpg',full_legal_name='New User'),{'id':'a','phone_verified':True,'created_at':datetime.now(timezone.utc).isoformat(),'blue_subscription_status':'active','blue_subscription_ends_at':'2099-01-01T00:00:00+00:00'})
         self.assertTrue(result['ok'])
         self.db.verifications.insert_one.assert_awaited_once()
+
+    async def test_normal_account_cannot_save_profile_links(self):
+        with self.assertRaises(HTTPException) as exc:
+            await server.require_blue({'id':'ordinary','verified':True})
+        self.assertEqual(exc.exception.status_code,403)
+        self.db.users.update_one.assert_not_awaited()
+
+    async def test_active_blue_can_save_two_links(self):
+        me=await server.require_blue({'id':'blue','blue_tick_manual':True})
+        result=await server.save_external_links(server.ExternalLinksBody(links=[server.ExternalLink(label='Social',url='https://example.com'),server.ExternalLink(label='Website',url='https://example.org')]),me)
+        self.assertTrue(result['ok'])
+        self.db.users.update_one.assert_awaited_once()
+
+    async def test_expired_subscription_has_no_links_entitlement(self):
+        with self.assertRaises(HTTPException) as exc:
+            await server.require_blue({'id':'expired','blue_identity_approved':True,'blue_subscription_status':'active','blue_subscription_ends_at':'2020-01-01T00:00:00+00:00'})
+        self.assertEqual(exc.exception.status_code,403)
