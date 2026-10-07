@@ -43,7 +43,7 @@ export default function Help() {
     setSubmitting(true);
     try {
       await api.post("/tickets", { subject: subject.trim(), description: description.trim(), screenshot });
-      toast.show("Ticket submitted!", "success");
+      toast.show("Your support request is under review by the Glint Team", "success");
       setSubject(""); setDescription(""); setScreenshot(null);
       tickets.refetch();
     } catch (e: any) {
@@ -85,7 +85,7 @@ export default function Help() {
                     <Text style={[styles.statusText, { color: t.status === "resolved" ? colors.success : colors.warning }]}>{t.status}</Text>
                   </View>
                 </View>
-                <Text style={styles.ticketDesc}>{t.description}</Text>
+                <Text style={styles.ticketDesc}>{t.description}</Text>{t.status!=="resolved"&&<Text style={styles.ticketDesc}>Your request is under review by the Glint Team.</Text>}
                 {t.reply && (
                   <View style={styles.reply}>
                     <Text style={styles.replyLabel}>Glint Support:</Text>

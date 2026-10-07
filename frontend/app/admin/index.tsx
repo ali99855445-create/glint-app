@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, Modal, TextInput, Switch } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Modal, TextInput, Switch, Alert } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -11,6 +11,7 @@ import { Icon } from "@/src/components/Icon";
 import { Button } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
 import { storage } from "@/src/utils/storage";
+import { IdentityVideo } from "@/src/components/IdentityVideo";
 import { timeAgo } from "@/src/lib/time";
 
 const TABS = ["Users", "Content", "Reports", "Appeals", "Verify", "Tickets", "Controls", "Audit", "System"];
@@ -113,7 +114,7 @@ export default function AdminDashboard() {
   });
 
   const approveV = useMutation({
-    mutationFn: (id: string) => api.post(`/admin/verifications/${id}/approve`, { reason: "Approved by Glint administrator" }, true),
+    mutationFn: (id: string) => api.post(`/admin/verifications/${id}/approve`, { reason: "Approved by Glint Team", identity_match_confirmed: true }, true),
     onSuccess: () => { toast.show("Blue Tick granted", "success"); refreshAll(); },
   });
   const rejectV = useMutation({
@@ -212,6 +213,7 @@ export default function AdminDashboard() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}>
+        <Button title="Verified name/photo requests" onPress={()=>router.push("/admin/blue-controls")} style={{margin:16}}/>
         <View style={styles.statsGrid}>
           <Stat icon="people" label="Users" value={S.users} />
           <Stat icon="pulse" label="Active 24h" value={S.active_24h} />
@@ -297,7 +299,7 @@ export default function AdminDashboard() {
                       variant={item.deleted_at ? "secondary" : "danger"}
                       onPress={() => {
                         setContentAction({ id: item.id, kind: item.kind, restore: !!item.deleted_at });
-                        setContentReason(item.deleted_at ? "Restored after admin review" : "");
+                        setContentReason(item.deleted_at ? "Restored after Glint Team review" : "");
                       }}
                       style={{ alignSelf: "flex-start" }}
                     />
@@ -374,10 +376,10 @@ export default function AdminDashboard() {
                   </View>
                   {v.note ? <Text style={styles.cardDesc}>{v.note}</Text> : null}
                   {v.document ? <><Text style={styles.cardMeta}>ID document</Text><Image source={{ uri: fileUrl(v.document) }} style={styles.attachImg} contentFit="cover" /></> : null}
-                  {v.selfie ? <><Text style={styles.cardMeta}>Live selfie</Text><Image source={{ uri: fileUrl(v.selfie) }} style={styles.attachImg} contentFit="cover" /></> : null}
+                  {v.selfie ? <><Text style={styles.cardMeta}>Live selfie</Text>{v.selfie_media_type==="video"?<IdentityVideo url={v.selfie}/>:<Image source={{ uri: fileUrl(v.selfie) }} style={styles.attachImg} contentFit="cover" />}</> : null}
                   {v.status === "pending" ? (
                     <View style={styles.actionRow}>
-                      <Button title="Grant Blue Tick" small onPress={() => approveV.mutate(v.id)} style={{ flex: 1 }} />
+                      <Button title="Grant Blue Tick" small onPress={() => Alert.alert("Confirm identity match", "Have you reviewed the ID and live selfie, and confirmed the document name matches the profile name and the face matches the ID?", [{text:"Cancel",style:"cancel"},{text:"Confirmed — grant Blue",onPress:()=>approveV.mutate(v.id)}])} style={{ flex: 1 }} />
                       <Button title="Reject" small variant="secondary" onPress={() => rejectV.mutate(v.id)} style={{ flex: 1 }} />
                     </View>
                   ) : null}

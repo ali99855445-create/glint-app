@@ -87,7 +87,7 @@ export default function Settings() {
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl, gap: spacing.xl }}>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
-          <View style={styles.contactSummary}>
+          <Pressable style={styles.contactSummary} accessibilityRole="button" onPress={()=>router.push("/account-contact")} testID="settings-account-contact">
             <Text style={styles.contactSummaryTitle}>Account contact</Text>
             <View style={styles.contactLine}>
               <Icon name="mail-outline" size={17} color={colors.brand} />
@@ -99,8 +99,8 @@ export default function Settings() {
               <Text style={styles.contactLabel}>Phone</Text>
               <Text style={styles.contactValue}>{me.data?.phone || "Not linked"}</Text>
             </View>
-            <Text style={styles.contactHint}>You can log in with your username, linked email, or linked phone number.</Text>
-          </View>
+            <Text style={styles.contactHint}>Tap to add or update your email or phone number. Verify your new contact with a code.</Text>
+          </Pressable>
           <Row icon="person-outline" label="Edit profile" onPress={() => router.push("/edit-profile")} testID="settings-edit-profile" />
           <Row icon="bookmark-outline" label="Saved posts" onPress={() => router.push("/saved")} testID="settings-saved" />
           <Row icon="star-outline" label="Inner Circle" onPress={() => router.push("/inner-circle")} testID="settings-inner-circle" />

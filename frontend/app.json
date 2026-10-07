@@ -2,7 +2,7 @@
   "expo": {
     "name": "Glint",
     "slug": "glint-app",
-    "version": "1.0.17",
+    "version": "1.0.18",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "glint",
@@ -13,7 +13,7 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Upload photos to posts, stories and your profile",
         "NSCameraUsageDescription": "Take photos to share on Glint",
-        "NSMicrophoneUsageDescription": "Record voice notes in chats"
+        "NSMicrophoneUsageDescription": "Record voice notes and live selfie videos for identity review"
       }
     },
     "android": {
@@ -31,7 +31,7 @@
         "READ_EXTERNAL_STORAGE",
         "CAMERA"
       ],
-      "versionCode": 17,
+      "versionCode": 18,
       "intentFilters": [
         {
           "action": "VIEW",
@@ -95,7 +95,22 @@
         }
       ],
       "expo-iap",
-      "@react-native-vector-icons/ionicons"
+      "@react-native-vector-icons/ionicons",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Use the camera to capture identity documents and live selfie videos",
+          "microphonePermission": "Record audio with live selfie videos"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Record a live selfie video for identity review",
+          "microphonePermission": "Record audio with your live selfie video",
+          "recordAudioAndroid": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

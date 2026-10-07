@@ -1,3 +1,4 @@
+import { IdentityVideo } from "@/src/components/IdentityVideo";
 import React, { useEffect, useState } from "react";
 import { View, Text, ScrollView, Pressable, TextInput, Modal, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
@@ -98,7 +99,7 @@ export default function AdminUserDetail() {
   const runAction = useMutation({
     mutationFn: async () => {
       if (!action) return;
-      const why = reason.trim() || "Glint administrator action";
+      const why = reason.trim() || "Glint Team action";
       switch (action.kind) {
         case "suspend":
           return api.post(`/admin/users/${id}/suspend`, { reason: why, duration_days: Math.max(0, Number(days) || 0) }, true);
@@ -247,7 +248,7 @@ export default function AdminUserDetail() {
             <Button
               title={u.blue_tick ? "Remove Blue Tick" : "Grant Blue Tick"}
               small variant="secondary"
-              onPress={() => openAction({ kind: u.blue_tick ? "revoke" : "grant", title: u.blue_tick ? "Remove Blue Tick" : "Grant Blue Tick" }, u.blue_tick ? "Blue Tick removed by Glint administrator" : "Blue Tick granted by Glint administrator")}
+              onPress={() => openAction({ kind: u.blue_tick ? "revoke" : "grant", title: u.blue_tick ? "Remove Blue Tick" : "Grant Blue Tick" }, u.blue_tick ? "Blue Tick removed by Glint Team" : "Blue Tick granted by Glint Team")}
               style={{ flex: 1 }}
             />
             <Button
@@ -262,7 +263,7 @@ export default function AdminUserDetail() {
             <Button title="Restrict features" small variant="secondary" onPress={() => openAction({ kind: "restrict", title: "Restrict posting & messaging" })} style={{ flex: 1 }} />
           </View>
           <View style={styles.actionGrid}>
-            <Button title="Clear restrictions" small variant="secondary" onPress={() => openAction({ kind: "clearRestrictions", title: "Clear feature restrictions" }, "Restrictions removed after admin review")} style={{ flex: 1 }} />
+            <Button title="Clear restrictions" small variant="secondary" onPress={() => openAction({ kind: "clearRestrictions", title: "Clear feature restrictions" }, "Restrictions removed after Glint Team review")} style={{ flex: 1 }} />
             <Button title="Force logout" small variant="secondary" onPress={() => openAction({ kind: "forceLogout", title: "Force logout on all sessions" }, "Security session reset")} style={{ flex: 1 }} />
           </View>
           <Button
@@ -306,7 +307,7 @@ export default function AdminUserDetail() {
                   kind: p.deleted_at ? "restorePost" : "deletePost",
                   targetId: p.id,
                   title: p.deleted_at ? "Restore post" : "Delete post",
-                }, p.deleted_at ? "Restored after admin review" : "")}
+                }, p.deleted_at ? "Restored after Glint Team review" : "")}
                 style={{ alignSelf: "flex-start" }}
               />
             </View>
@@ -331,7 +332,7 @@ export default function AdminUserDetail() {
                   kind: st.deleted_at ? "restoreStory" : "deleteStory",
                   targetId: st.id,
                   title: st.deleted_at ? "Restore story" : "Delete story",
-                }, st.deleted_at ? "Restored after admin review" : "")}
+                }, st.deleted_at ? "Restored after Glint Team review" : "")}
                 style={{ alignSelf: "flex-start" }}
               />
             </View>
@@ -355,7 +356,7 @@ export default function AdminUserDetail() {
                   kind: cm.deleted_at ? "restoreComment" : "deleteComment",
                   targetId: cm.id,
                   title: cm.deleted_at ? "Restore comment" : "Delete comment",
-                }, cm.deleted_at ? "Restored after admin review" : "")}
+                }, cm.deleted_at ? "Restored after Glint Team review" : "")}
                 style={{ alignSelf: "flex-start" }}
               />
             </View>
@@ -391,7 +392,7 @@ export default function AdminUserDetail() {
               {v.review_reason ? <Text style={styles.reasonText}>Review: {v.review_reason}</Text> : null}
               <View style={styles.verificationMedia}>
                 {!!v.document && <Image source={{ uri: fileUrl(v.document) }} style={styles.smallMedia} contentFit="cover" />}
-                {!!v.selfie && <Image source={{ uri: fileUrl(v.selfie) }} style={styles.smallMedia} contentFit="cover" />}
+                {!!v.selfie && (v.selfie_media_type==="video"?<IdentityVideo url={v.selfie}/>:<Image source={{ uri: fileUrl(v.selfie) }} style={styles.smallMedia} contentFit="cover" />)}
               </View>
             </View>
           ))}

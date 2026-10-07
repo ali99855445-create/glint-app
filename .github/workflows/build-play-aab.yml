@@ -195,6 +195,6 @@ jobs:
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: glint-v1.0.17-apk-signed
+          name: glint-v1.0.18-apk-signed
           path: frontend/android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30

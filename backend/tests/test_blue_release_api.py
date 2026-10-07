@@ -12,10 +12,12 @@ from fastapi import HTTPException
 class ReleaseApiTests(IsolatedAsyncioTestCase):
     def setUp(self):
         self.db = SimpleNamespace(users=AsyncMock(), files=AsyncMock(), profile_reviews=AsyncMock(), verifications=AsyncMock())
+        self.db.profile_reviews.find_one.return_value=None
         self.patch = patch.object(server, 'db', self.db)
         self.patch.start()
         self.addCleanup(self.patch.stop)
     async def test_absolute_upload_url_enters_identity_review(self):
+        self.db.profile_reviews.find_one.return_value=None
         self.db.files.find_one.return_value = {'path': 'glint/uploads/a/document.jpg'}
         result = await server.profile_edit_v2(server.ProfileEditV2(full_name='New', name_evidence_url='https://glint-api-xf2i.onrender.com/api/files/glint/uploads/a/document.jpg?token=test', live_selfie_url='/api/files/glint/uploads/a/selfie.jpg'), {'id': 'a', 'full_name': 'Old', 'blue_tick_manual': True})
         self.assertTrue(result['identity_review_required'])
@@ -69,7 +71,7 @@ class ReleaseApiTests(IsolatedAsyncioTestCase):
     async def test_new_account_can_submit_paid_identity_review(self):
         self.db.verifications.find_one.return_value=None
         with patch.object(server,'app_feature_enabled',return_value=True):
-            result=await server.submit_verification(server.VerificationSubmit(document='/api/files/id.jpg',selfie='/api/files/selfie.jpg',full_legal_name='New User'),{'id':'a','phone_verified':True,'created_at':datetime.now(timezone.utc).isoformat(),'blue_subscription_status':'active','blue_subscription_ends_at':'2099-01-01T00:00:00+00:00'})
+            result=await server.submit_verification(server.VerificationSubmit(document='/api/files/id.jpg',selfie='/api/files/selfie.mp4',full_legal_name='New User'),{'id':'a','full_name':'New User','created_at':datetime.now(timezone.utc).isoformat(),'blue_subscription_status':'active','blue_subscription_ends_at':'2099-01-01T00:00:00+00:00'})
         self.assertTrue(result['ok'])
         self.db.verifications.insert_one.assert_awaited_once()
 
