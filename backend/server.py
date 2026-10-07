@@ -1,6 +1,11 @@
 import os
 import uuid
 import random
+import secrets
+import hashlib
+import hmac
+import unicodedata
+import re
 import logging
 import smtplib
 import ssl
@@ -471,6 +476,97 @@ async def require_messenger_admin(me=Depends(get_current_user)):
     raise HTTPException(403, "Messenger admin only")
 
 
+async def require_review_admin(authorization: Optional[str] = Header(None)):
+    # The app dashboard uses its separate admin session; messenger tools use a user session.
+    try:
+        return await require_admin(authorization)
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+    me = await get_current_user(authorization)
+    return await require_messenger_admin(me)
+
+
+def identity_name(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value or "").casefold().split())
+
+
+async def require_owned_identity_file(url: str, user_id: str, media: str):
+    path = urllib.parse.urlparse(url).path.removeprefix("/api/files/")
+    if not await db.files.find_one({"path": path, "owner_id": user_id, "content_type": {"$regex": "^" + media + "/"}}):
+        raise HTTPException(400, "Upload your own ID document and record a live selfie video in the app")
+
+
+class ContactLinkRequest(BaseModel):
+    kind: str
+    contact: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class ContactLinkConfirm(BaseModel):
+    request_id: str
+    code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+@api.post("/account/contact/request")
+async def request_contact_link(body: ContactLinkRequest, me=Depends(get_current_user)):
+    if body.kind not in {"email", "phone"}:
+        raise HTTPException(400, "Choose email or phone")
+    if not verify_pw(body.password, me.get("password") or ""):
+        raise HTTPException(403, "Your current password is incorrect")
+    contact = body.contact.strip().lower() if body.kind == "email" else normalize_phone(body.contact)
+    if body.kind == "email" and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", contact):
+        raise HTTPException(400, "Enter a valid email address")
+    if await db.users.find_one({body.kind: contact, "verified": True, "deleted_at": None, "id": {"$ne": me["id"]}}):
+        raise HTTPException(409, "This contact is already linked to another account")
+    recent = await db.contact_verifications.find_one({"user_id": me["id"], "created_at": {"$gt": (now_dt()-timedelta(seconds=60)).isoformat()}})
+    if recent:
+        raise HTTPException(429, "Wait 60 seconds before requesting another code")
+    hourly = await db.contact_verifications.count_documents({"user_id": me["id"], "created_at": {"$gt": (now_dt()-timedelta(hours=1)).isoformat()}})
+    if hourly >= 5:
+        raise HTTPException(429, "Too many codes requested. Try again later")
+    code = f"{secrets.randbelow(1000000):06d}"
+    rid = new_id()
+    provider = "twilio" if body.kind == "phone" and not _infobip_sms_configured() else "local"
+    await db.contact_verifications.update_many({"user_id": me["id"], "status": "pending"}, {"$set": {"status": "superseded"}})
+    await db.contact_verifications.insert_one({"id": rid, "user_id": me["id"], "kind": body.kind, "contact": contact, "old_contact": me.get(body.kind), "code_hash": hashlib.sha256((rid+code).encode()).hexdigest(), "provider": provider, "attempts": 0, "status": "pending", "created_at": now_iso(), "expires_at": (now_dt()+timedelta(minutes=10)).isoformat()})
+    sent = await send_otp_email(contact, code, "contact") if body.kind == "email" else await send_phone_otp(contact, code)
+    if not sent:
+        await db.contact_verifications.update_one({"id": rid}, {"$set": {"status": "delivery_failed"}})
+        raise HTTPException(503, "Could not send verification code. Please try again later")
+    return {"request_id": rid, "message": "Verification code sent", "expires_in": 600}
+
+
+@api.post("/account/contact/confirm")
+async def confirm_contact_link(body: ContactLinkConfirm, me=Depends(get_current_user)):
+    record = await db.contact_verifications.find_one_and_update({"id": body.request_id, "user_id": me["id"], "status": "pending", "attempts": {"$lt": 5}, "expires_at": {"$gt": now_iso()}}, {"$inc": {"attempts": 1}})
+    if not record:
+        raise HTTPException(400, "Code expired or too many attempts. Request a new code")
+    valid = await check_phone_otp(record["contact"], body.code) if record["provider"] == "twilio" else hmac.compare_digest(record["code_hash"], hashlib.sha256((body.request_id+body.code).encode()).hexdigest())
+    if not valid:
+        raise HTTPException(400, "Invalid verification code")
+    kind, contact = record["kind"], record["contact"]
+    if await db.users.find_one({kind: contact, "verified": True, "deleted_at": None, "id": {"$ne": me["id"]}}):
+        raise HTTPException(409, "This contact is already linked to another account")
+    # A unique index closes concurrent signup/link races. Fail closed on legacy duplicates.
+    try:
+        await db.users.create_index([(kind, 1)], name="unique_verified_"+kind, unique=True, partialFilterExpression={"verified": True, kind: {"$type": "string"}, "deleted_at": None})
+    except Exception:
+        logger.exception("Contact uniqueness check could not be established")
+        raise HTTPException(503, "Contact linking is temporarily unavailable. Contact Glint support")
+    claimed = await db.contact_verifications.find_one_and_update({"id": body.request_id, "user_id": me["id"], "status": "pending"}, {"$set": {"status": "consumed"}})
+    if not claimed:
+        raise HTTPException(409, "This code has already been used")
+    try:
+        result = await db.users.update_one({"id": me["id"], kind: record.get("old_contact"), "deleted_at": None}, {"$set": {kind: contact, kind+"_verified": True}})
+    except Exception:
+        raise HTTPException(409, "This contact could not be linked. Request a new code")
+    if not result.matched_count:
+        raise HTTPException(409, "Account contact changed. Request a new code")
+    await admin_notify(me["id"], f"Your {kind} was updated and verified.")
+    return {"ok": True, "message": "Contact verified and linked"}
+
+
 def public_user(u: dict) -> dict:
     if not u:
         return None
@@ -662,7 +758,7 @@ class MessengerAdminControlsBody(BaseModel):
 class VerificationSubmit(BaseModel):
     document: str
     selfie: str
-    full_legal_name: str
+    full_legal_name: str = Field(min_length=1, max_length=150)
     note: Optional[str] = None
 
 
@@ -2611,15 +2707,19 @@ async def submit_verification(body: VerificationSubmit, me=Depends(get_current_u
     if not play_billing.payment_active(me):
         raise HTTPException(402, "An active Google Play subscription is required before applying")
     eligibility = verification_eligibility(me)
-    if not eligibility["phone_verified"]:
-        raise HTTPException(400, "A verified phone number is required")
+    if identity_name(body.full_legal_name) != identity_name(me.get("full_name")):
+        raise HTTPException(400, "Your profile name must match the full name on your ID document")
+    await require_owned_identity_file(body.document, me["id"], "image")
+    await require_owned_identity_file(body.selfie, me["id"], "video")
 
     await db.verifications.insert_one({
         "id": new_id(),
         "user_id": me["id"],
         "document": body.document,
         "selfie": body.selfie,
-        "full_legal_name": body.full_legal_name,
+        "full_legal_name": body.full_legal_name.strip(),
+        "selfie_media_type": "video",
+        "profile_name_at_submission": me.get("full_name"),
         "note": body.note,
         "eligibility_snapshot": eligibility,
         "status": "pending",
@@ -2742,6 +2842,12 @@ class ProfileEditV2(ProfileUpdate):
     live_selfie_url: Optional[str] = None
 
 
+@api.get("/profile/identity-review/me")
+async def my_profile_identity_review(me=Depends(get_current_user)):
+    row = await db.profile_reviews.find_one({"user_id": me["id"]}, {"_id": 0}, sort=[("created_at", -1)])
+    return row or {"status": "none"}
+
+
 @api.post("/profile/edit-v2")
 async def profile_edit_v2(body: ProfileEditV2, me=Depends(get_current_user)):
     update = body.model_dump(exclude_unset=True, exclude={"name_evidence_url", "avatar_evidence_url", "live_selfie_url"})
@@ -2755,11 +2861,14 @@ async def profile_edit_v2(body: ProfileEditV2, me=Depends(get_current_user)):
     changes = {k: update[k] for k in ("full_name", "avatar") if k in update and update[k] != me.get(k)}
     review_id = None
     if play_billing.blue_active(me) and changes:
+        pending = await db.profile_reviews.find_one({"user_id": me["id"], "status": "pending"})
+        if pending:
+            raise HTTPException(409, "Your previous identity change is still under review by the Glint Team")
         if not body.live_selfie_url:
-            raise HTTPException(400, "A live selfie is required for verified identity changes")
+            raise HTTPException(400, "A live selfie video is required for verified identity changes")
         selfie_path = urllib.parse.urlparse(body.live_selfie_url).path.removeprefix("/api/files/")
-        if not await db.files.find_one({"path": selfie_path, "owner_id": me["id"], "content_type": {"$regex": "^image/"}}):
-            raise HTTPException(400, "Upload your own live selfie")
+        if not await db.files.find_one({"path": selfie_path, "owner_id": me["id"], "content_type": {"$regex": "^video/"}}):
+            raise HTTPException(400, "Record your own live selfie video")
         for key in changes:
             evidence = body.name_evidence_url if key == "full_name" else body.avatar_evidence_url
             if not evidence:
@@ -2784,7 +2893,7 @@ class ManualBlueBody(BaseModel):
 
 
 @api.post("/admin/blue/manual")
-async def manual_blue(body: ManualBlueBody, admin=Depends(require_messenger_admin)):
+async def manual_blue(body: ManualBlueBody, admin=Depends(require_review_admin)):
     user = await db.users.find_one({"id": body.user_id, "deleted_at": None})
     if not user:
         raise HTTPException(404, "User not found")
@@ -2796,13 +2905,14 @@ async def manual_blue(body: ManualBlueBody, admin=Depends(require_messenger_admi
 
 
 class ProfileReviewBody(BaseModel):
+    identity_match_confirmed: bool = False
     review_id: str
     decision: str
     note: Optional[str] = None
 
 
 @api.get("/admin/profile-change/reviews")
-async def pending_profile_changes(admin=Depends(require_messenger_admin)):
+async def pending_profile_changes(admin=Depends(require_review_admin)):
     rows = await db.profile_reviews.find({"status": "pending"}, {"_id": 0}).sort("created_at", 1).limit(100).to_list(100)
     for row in rows:
         user = await db.users.find_one({"id": row["user_id"]})
@@ -2812,9 +2922,11 @@ async def pending_profile_changes(admin=Depends(require_messenger_admin)):
 
 
 @api.post("/admin/profile-change/review")
-async def review_profile_change(body: ProfileReviewBody, admin=Depends(require_messenger_admin)):
+async def review_profile_change(body: ProfileReviewBody, admin=Depends(require_review_admin)):
     if body.decision not in {"approved", "rejected"}:
         raise HTTPException(400, "Invalid decision")
+    if body.decision == "approved" and not body.identity_match_confirmed:
+        raise HTTPException(400, "Confirm the document name and live selfie match the requested identity")
     review = await db.profile_reviews.find_one_and_update({"id": body.review_id, "status": "pending"}, {"$set": {"status": body.decision, "reviewed_at": now_iso(), "note": body.note}})
     if not review:
         raise HTTPException(404, "Pending review not found")
@@ -2977,14 +3089,24 @@ async def admin_verifications(_=Depends(require_admin)):
     return out
 
 
+class IdentityApprovalBody(AdminReasonBody):
+    identity_match_confirmed: bool = False
+
+
 @api.post("/admin/verifications/{vid}/approve")
-async def approve_verification(vid: str, body: AdminReasonBody = AdminReasonBody(reason="Identity verification approved"), _=Depends(require_admin)):
+async def approve_verification(vid: str, body: IdentityApprovalBody, _=Depends(require_admin)):
     v = await db.verifications.find_one({"id": vid})
     if not v:
         raise HTTPException(404, "Not found")
     applicant = await db.users.find_one({"id": v["user_id"]})
     if not applicant or not play_billing.payment_active(applicant):
         raise HTTPException(402, "Applicant needs an active Google Play subscription")
+    if v.get("status") != "pending":
+        raise HTTPException(409, "This application has already been reviewed")
+    if not body.identity_match_confirmed:
+        raise HTTPException(400, "Confirm the document name matches the profile name and the live selfie matches the ID")
+    if identity_name(v.get("full_legal_name")) != identity_name(applicant.get("full_name")):
+        raise HTTPException(409, "The profile name does not match the submitted identity")
     reason = (body.reason or "Identity verification approved").strip()
     await db.verifications.update_one({"id": vid}, {"$set": {"status": "approved", "review_reason": reason, "reviewed_at": now_iso()}})
     await db.users.update_one({"id": v["user_id"]}, {"$set": {"golden_tick": True, "blue_source": "subscription", "blue_identity_approved": True}})
@@ -3850,7 +3972,7 @@ async def privacy_policy():
     <li>Account information such as name, username, email address or phone number, password credentials in protected form, and account status.</li>
     <li>Profile information you choose to provide, such as profile photo, cover photo, bio, date of birth, and other profile details.</li>
     <li>Content and activity such as photo posts, stories, comments, likes, saves, friend requests, friendships, messages, reports, and moderation interactions.</li>
-    <li>Verification information when you apply for verification, which may include a verified phone number, government-issued identification, and a live selfie.</li>
+    <li>Verification information when you apply for verification, which includes government-issued identification and a live selfie video.</li>
     <li>Service and security records needed to operate, troubleshoot, protect, and prevent abuse of Glint.</li>
   </ul>
 
