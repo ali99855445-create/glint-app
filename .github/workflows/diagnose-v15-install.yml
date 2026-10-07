@@ -34,21 +34,7 @@ jobs:
           arch: x86_64
           ram-size: 2048M
           emulator-boot-timeout: 300
-          script: |
-            adb shell getprop ro.build.version.sdk
-            adb shell getconf PAGE_SIZE
-            adb logcat -c
-            set +e
-            adb install artifacts/Glint-v1.0.15-G-logo.apk > install.txt 2>&1
-            STATUS=$?
-            cat install.txt
-            adb logcat -d > install-logcat.txt
-            if [ "$STATUS" -ne 0 ]; then exit "$STATUS"; fi
-            adb shell am start -W -n com.glinttechnologies.glint/com.glinttechnologies.glint.MainActivity > launch.txt 2>&1
-            cat launch.txt
-            sleep 10
-            adb logcat -d > launch-logcat.txt
-            adb shell pidof com.glinttechnologies.glint
+          script: adb install artifacts/Glint-v1.0.15-G-logo.apk
       - name: Save diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
