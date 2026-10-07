@@ -761,6 +761,7 @@ async def health():
     return {
         "status": "ok" if mongo_ok and email_ok else "degraded",
         "mongodb": mongo_ok,
+        "play_billing_configured": bool(os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()),
         "email_configured": email_ok,
         "email_provider": "resend" if RESEND_API_KEY else ("smtp" if email_ok else "none"),
         "sms_configured": _infobip_sms_configured() or _twilio_verify_configured(),
@@ -2610,8 +2611,6 @@ async def submit_verification(body: VerificationSubmit, me=Depends(get_current_u
     if not play_billing.payment_active(me):
         raise HTTPException(402, "An active Google Play subscription is required before applying")
     eligibility = verification_eligibility(me)
-    if not eligibility["account_old_enough"]:
-        raise HTTPException(400, "Account must be at least 2 months old")
     if not eligibility["phone_verified"]:
         raise HTTPException(400, "A verified phone number is required")
 
@@ -2645,7 +2644,7 @@ class PlayPurchaseBody(BaseModel):
 
 @api.get("/blue/billing-config")
 async def blue_billing_config(me=Depends(get_current_user)):
-    return {"product_id": play_billing.PRODUCT_ID if os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip() else None, "account_id": play_billing.account_id(me["id"])}
+    return {"product_id": play_billing.PRODUCT_ID, "checkout_ready": bool(os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()), "account_id": play_billing.account_id(me["id"]), "intro_offer_id": play_billing.INTRO_OFFER_ID, "intro_eligible": play_billing.intro_eligible(me), "base_plan_id": "monthly"}
 
 
 @api.post("/blue/purchases/verify")
@@ -2656,6 +2655,12 @@ async def blue_verify_purchase(body: PlayPurchaseBody, me=Depends(get_current_us
         raise HTTPException(400, str(exc))
     except Exception:
         raise HTTPException(503, "Purchase verification is temporarily unavailable. Restore your purchase to retry.")
+    if result.get("offer_id") == play_billing.INTRO_OFFER_ID:
+        owner = await db.users.find_one_and_update(
+            {"id": me["id"], "$or": [{"blue_intro_used_at": {"$exists": False}}, {"blue_intro_used_at": None}, {"blue_intro_purchase_token": body.purchase_token}]},
+            {"$set": {"blue_intro_used_at": me.get("blue_intro_used_at") or now_iso(), "blue_intro_purchase_token": body.purchase_token}})
+        if not owner:
+            raise HTTPException(409, "The first-month offer has already been used on this Glint account. Contact support for this purchase.")
     await db.users.update_one({"id": me["id"]}, {"$set": {
         "blue_subscription_status": "active", "blue_subscription_ends_at": result["ends_at"],
         "blue_subscription_auto_renew": result["auto_renew"],
@@ -2692,7 +2697,7 @@ async def require_blue(me=Depends(get_current_user)):
 
 @api.get("/profile/external-links")
 async def get_external_links(me=Depends(get_current_user)):
-    return {"links": me.get("external_links", [])}
+    return {"links": me.get("external_links", []) if play_billing.blue_active(me) else []}
 
 
 @api.post("/profile/external-links")
@@ -2734,11 +2739,12 @@ class ProfileEditV2(ProfileUpdate):
     date_of_birth: Optional[str] = None
     name_evidence_url: Optional[str] = None
     avatar_evidence_url: Optional[str] = None
+    live_selfie_url: Optional[str] = None
 
 
 @api.post("/profile/edit-v2")
 async def profile_edit_v2(body: ProfileEditV2, me=Depends(get_current_user)):
-    update = body.model_dump(exclude_unset=True, exclude={"name_evidence_url", "avatar_evidence_url"})
+    update = body.model_dump(exclude_unset=True, exclude={"name_evidence_url", "avatar_evidence_url", "live_selfie_url"})
     if "full_name" in update and not (update["full_name"] or "").strip():
         raise HTTPException(400, "Name cannot be empty")
     if update.get("date_of_birth"):
@@ -2749,6 +2755,11 @@ async def profile_edit_v2(body: ProfileEditV2, me=Depends(get_current_user)):
     changes = {k: update[k] for k in ("full_name", "avatar") if k in update and update[k] != me.get(k)}
     review_id = None
     if play_billing.blue_active(me) and changes:
+        if not body.live_selfie_url:
+            raise HTTPException(400, "A live selfie is required for verified identity changes")
+        selfie_path = urllib.parse.urlparse(body.live_selfie_url).path.removeprefix("/api/files/")
+        if not await db.files.find_one({"path": selfie_path, "owner_id": me["id"], "content_type": {"$regex": "^image/"}}):
+            raise HTTPException(400, "Upload your own live selfie")
         for key in changes:
             evidence = body.name_evidence_url if key == "full_name" else body.avatar_evidence_url
             if not evidence:
@@ -2757,7 +2768,7 @@ async def profile_edit_v2(body: ProfileEditV2, me=Depends(get_current_user)):
             if not await db.files.find_one({"path": file_path, "owner_id": me["id"]}):
                 raise HTTPException(400, "Upload your own supporting evidence")
         review_id = new_id()
-        await db.profile_reviews.insert_one({"id": review_id, "user_id": me["id"], "changes": changes, "name_evidence_url": body.name_evidence_url, "avatar_evidence_url": body.avatar_evidence_url, "status": "pending", "created_at": now_iso()})
+        await db.profile_reviews.insert_one({"id": review_id, "user_id": me["id"], "changes": changes, "name_evidence_url": body.name_evidence_url, "avatar_evidence_url": body.avatar_evidence_url, "live_selfie_url": body.live_selfie_url, "status": "pending", "created_at": now_iso()})
         for key in changes:
             update.pop(key)
     if update:
@@ -2788,6 +2799,16 @@ class ProfileReviewBody(BaseModel):
     review_id: str
     decision: str
     note: Optional[str] = None
+
+
+@api.get("/admin/profile-change/reviews")
+async def pending_profile_changes(admin=Depends(require_messenger_admin)):
+    rows = await db.profile_reviews.find({"status": "pending"}, {"_id": 0}).sort("created_at", 1).limit(100).to_list(100)
+    for row in rows:
+        user = await db.users.find_one({"id": row["user_id"]})
+        row["current_name"] = (user or {}).get("full_name")
+        row["username"] = (user or {}).get("username")
+    return rows
 
 
 @api.post("/admin/profile-change/review")
@@ -3624,6 +3645,7 @@ async def admin_system(_=Depends(require_admin)):
     return {
         "api": True,
         "mongodb": mongo_ok,
+        "play_billing_configured": bool(os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()),
         "email_configured": _email_provider_configured(),
         "email_provider": "resend" if RESEND_API_KEY else ("smtp" if _email_provider_configured() else "none"),
         "sms_configured": _infobip_sms_configured() or _twilio_verify_configured(),

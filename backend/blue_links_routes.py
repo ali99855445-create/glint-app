@@ -32,10 +32,10 @@ def _valid_https_url(value: str) -> bool:
 def install_blue_links_routes(api, db, get_current_user, now_iso):
     @api.get("/profile/external-links")
     async def get_external_links(me=Depends(get_current_user)):
-        user = await db.users.find_one({"id": me["id"]}, {"_id": 0, "external_links": 1})
+        user = await db.users.find_one({"id": me["id"]}, {"_id": 0})
         if not user:
             raise HTTPException(404, "User not found")
-        return {"ok": True, "links": user.get("external_links") or []}
+        return {"ok": True, "links": (user.get("external_links") or []) if resolve_blue_entitlements(user)["active"] else []}
 
     @api.post("/profile/external-links")
     async def save_external_links(body: ExternalLinksBody, me=Depends(get_current_user)):

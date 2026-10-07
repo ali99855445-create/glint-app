@@ -27,6 +27,7 @@ def _public_user_blue(u: dict) -> dict:
         "bio": u.get("bio"),
         "location": u.get("location"),
         "blue_tick_active": blue,
+        "external_links": u.get("external_links", []) if blue else [],
         "verified": blue,
         "privacy": u.get("privacy", "public"),
         "created_at": u.get("created_at"),
