@@ -1,0 +1,62 @@
+name: Diagnose Glint APK installation
+on:
+  push:
+    branches: ["glint-install-diagnostic-v15"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: actions/download-artifact@v4
+        with:
+          name: glint-v15-G-logo-signed
+          run-id: 37580665324
+          github-token: ${{ github.token }}
+          path: artifacts
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install exact delivered APK on Android 16
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          ram-size: 2048M
+          emulator-boot-timeout: 300
+          script: |
+            adb shell getprop ro.build.version.sdk
+            adb shell getconf PAGE_SIZE
+            adb logcat -c
+            set +e
+            adb install artifacts/Glint-v1.0.15-G-logo.apk > install.txt 2>&1
+            STATUS=$?
+            cat install.txt
+            adb logcat -d > install-logcat.txt
+            if [ "$STATUS" -ne 0 ]; then exit "$STATUS"; fi
+            adb shell am start -W -n com.glinttechnologies.glint/com.glinttechnologies.glint.MainActivity > launch.txt 2>&1
+            cat launch.txt
+            sleep 10
+            adb logcat -d > launch-logcat.txt
+            adb shell pidof com.glinttechnologies.glint
+      - name: Save diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glint-install-diagnostics
+          path: |
+            install.txt
+            install-logcat.txt
+            launch.txt
+            launch-logcat.txt
+          retention-days: 7
