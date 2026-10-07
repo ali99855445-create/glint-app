@@ -49,7 +49,7 @@ export async function setThemeScheme(scheme: ColorScheme) {
   try { await AsyncStorage.setItem(THEME_KEY, scheme); } catch {}
 }
 
-function useThemeScheme(): ColorScheme {
+export function useThemeScheme(): ColorScheme {
   const [scheme, setScheme] = useState<ColorScheme>(activeScheme);
   useEffect(() => {
     listeners.add(setScheme);

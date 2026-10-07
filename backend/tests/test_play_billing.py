@@ -38,4 +38,14 @@ class BillingTests(unittest.TestCase):
     def test_manual_admin_grant_keeps_access(self):
         self.assertTrue(billing.blue_active({'blue_tick_manual': True}))
 
+    def test_intro_is_once_per_account(self):
+        self.assertTrue(billing.intro_eligible({'id':'new'}))
+        for field in ('blue_intro_used_at','blue_purchase_token','blue_subscription_ends_at'):
+            self.assertFalse(billing.intro_eligible({field:'already-used'}))
+    def test_google_offer_details_are_used(self):
+        self.data['lineItems'][0]['offerDetails']={'offerId':'firstmonth90','basePlanId':'monthly'}
+        result=billing.active_subscription(self.data,'user-a',self.now)
+        self.assertEqual(result['offer_id'],'firstmonth90')
+        self.assertEqual(result['base_plan_id'],'monthly')
+
 if __name__ == '__main__': unittest.main()

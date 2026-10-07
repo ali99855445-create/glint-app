@@ -3,7 +3,7 @@ import { View, Text, Pressable, ScrollView, ActivityIndicator, Modal, Share } fr
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { makeStyles, useTheme, fonts, spacing, radius } from "@/src/theme";
+import { makeStyles, useTheme, setThemeScheme, fonts, spacing, radius } from "@/src/theme";
 import { Icon } from "@/src/components/Icon";
 import { Button } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
@@ -27,7 +27,7 @@ function Row({ icon, label, value, onPress, danger, testID, rightEl }: any) {
 
 export default function Settings() {
   const styles = useStyles();
-  const { colors } = useTheme();
+  const { colors, scheme } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const toast = useToast();
@@ -126,6 +126,10 @@ export default function Settings() {
         </View>
 
         <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Appearance</Text>
+          <View style={styles.themeRow}>{(["dark", "light"] as const).map(mode => <Pressable key={mode} accessibilityRole="radio" accessibilityState={{checked: scheme === mode}} onPress={() => setThemeScheme(mode)} style={[styles.themeBtn, scheme === mode && {backgroundColor: colors.surface}]}><Text style={[styles.themeText,{color: colors.onSurface}]}>{mode === "dark" ? "Dark" : "White"}</Text></Pressable>)}</View>
+        </View>
+        <View style={styles.section}>
           <Text style={styles.sectionTitle}>Glint</Text>
           <Row icon="ribbon-outline" label="Get verified (Blue Tick)" onPress={() => router.push("/verification")} testID="settings-verification" />
           <Row icon="share-social-outline" label="Share Glint" onPress={shareGlint} testID="settings-share-app" />
@@ -145,7 +149,7 @@ export default function Settings() {
           <Row icon="trash-outline" label="Delete account" danger onPress={() => setConfirmDelete(true)} testID="settings-delete" />
         </View>
 
-        <Text style={styles.version}>Glint v1.0.13 · @{user?.username}</Text>
+        <Text style={styles.version}>Glint v1.0.17 · @{user?.username}</Text>
       </ScrollView>
 
       <Modal visible={!!privacyPicker} transparent animationType="fade" onRequestClose={() => setPrivacyPicker(null)}>

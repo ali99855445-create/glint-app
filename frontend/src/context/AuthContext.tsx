@@ -13,6 +13,8 @@ export type User = {
   country_code?: string | null;
   sparks?: number;
   verified: boolean;
+  blue_tick_active?: boolean;
+  external_links?: {label: string; url: string}[];
   privacy: string;
   email?: string | null;
   phone?: string | null;

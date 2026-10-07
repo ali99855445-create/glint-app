@@ -1,18 +1,9 @@
 import React, { createContext, useContext } from "react";
-
-// Theme is locked to the signature Black & Golden look (see src/theme.ts).
-// The provider is kept as a stable API so screens don't change.
-type Mode = "dark";
-type Ctx = { mode: Mode; setMode: (m: Mode) => void; toggle: () => void };
-
+import { ColorScheme, useThemeScheme, setThemeScheme } from "@/src/theme";
+type Ctx = { mode: ColorScheme; setMode: (m: ColorScheme) => void; toggle: () => void };
 const ThemeModeCtx = createContext<Ctx>(null as any);
-
-export function ThemeModeProvider({ children }: { children: React.ReactNode }) {
-  return (
-    <ThemeModeCtx.Provider value={{ mode: "dark", setMode: () => {}, toggle: () => {} }}>
-      {children}
-    </ThemeModeCtx.Provider>
-  );
+export function ThemeModeProvider({children}: {children: React.ReactNode}) {
+ const mode=useThemeScheme();
+ return <ThemeModeCtx.Provider value={{mode,setMode:setThemeScheme,toggle:()=>setThemeScheme(mode==="dark"?"light":"dark")}}>{children}</ThemeModeCtx.Provider>;
 }
-
-export const useThemeMode = () => useContext(ThemeModeCtx);
+export const useThemeMode=()=>useContext(ThemeModeCtx);

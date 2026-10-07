@@ -9,6 +9,7 @@ import { makeStyles, useTheme, fonts, spacing, radius } from "@/src/theme";
 import { api, fileUrl } from "@/src/api/client";
 import { Avatar, BlueTick } from "@/src/components/Avatar";
 import { Icon } from "@/src/components/Icon";
+import { ProfileLinks } from "@/src/components/ProfileLinks";
 import { PostCard } from "@/src/components/PostCard";
 import { Button } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
@@ -28,7 +29,7 @@ export default function UserProfile() {
   const [menu, setMenu] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
 
-  const profile = useQuery({ queryKey: ["profile", username], queryFn: () => api.get(`/users/${username}`) });
+  const profile = useQuery({ queryKey: ["profile", username], queryFn: () => api.get(`/users/${username}`), refetchInterval:15000 });
   const data = profile.data;
 
   const refetch = () => profile.refetch();
@@ -148,6 +149,7 @@ export default function UserProfile() {
           {data.verified && <BlueTick size={20} />}
         </View>
         <Text style={styles.username}>@{data.username}</Text>
+        <ProfileLinks profile={data}/>
         {!!data.bio && <Text style={styles.bio}>{data.bio}</Text>}
         {!!data.location && (
           <View style={styles.locationRow}><Icon name="location-outline" size={15} color={colors.muted} /><Text style={styles.location}>{data.location}</Text></View>

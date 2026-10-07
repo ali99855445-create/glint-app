@@ -6,6 +6,12 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 PRODUCT_ID = os.getenv('PLAY_BLUE_PRODUCT_ID', 'glint_blue_monthly')
+INTRO_OFFER_ID = 'firstmonth90'
+
+def intro_eligible(user):
+    return not (user.get('blue_intro_used_at') or user.get('blue_purchase_token') or user.get('blue_subscription_ends_at'))
+
+
 PACKAGE_NAME = 'com.glinttechnologies.glint'
 
 
@@ -25,7 +31,7 @@ def active_subscription(data, user_id, now=None):
     for item in items:
         expiry = datetime.fromisoformat(item.get('expiryTime', '').replace('Z', '+00:00'))
         if expiry > now:
-            return {'ends_at': expiry.isoformat(), 'auto_renew': bool(item.get('autoRenewingPlan', {}).get('autoRenewEnabled'))}
+            return {'ends_at': expiry.isoformat(), 'auto_renew': bool(item.get('autoRenewingPlan', {}).get('autoRenewEnabled')), 'offer_id': item.get('offerDetails', {}).get('offerId'), 'base_plan_id': item.get('offerDetails', {}).get('basePlanId')}
     raise ValueError('Subscription has expired or has the wrong product')
 
 
