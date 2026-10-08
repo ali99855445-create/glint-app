@@ -1,3 +1,4 @@
+import {queryClient} from "@/src/query-client";
 import { router } from "expo-router";
 import { Platform } from "react-native";
 import Constants from "expo-constants";
@@ -51,7 +52,7 @@ async function request(path: string, options: RequestInit = {}, useAdmin = false
   }
   if (!res.ok) {
     const message = (data && data.detail) || "Something went wrong";
-    if(res.status===403 && typeof message==='string' && message.startsWith('Account suspended') && token && !useAdmin){await setRestrictedToken(token);await setToken(null);router.replace('/account-suspended');}
+    if(res.status===403 && typeof message==='string' && message.startsWith('Account suspended') && token && !useAdmin){await setRestrictedToken(token);await setToken(null);queryClient.clear();router.replace('/account-suspended');}
     throw new Error(typeof message === "string" ? message : JSON.stringify(message));
   }
   return data;

@@ -1,13 +1,14 @@
 import React, { useState } from "react";
 import { View, Text, ScrollView, Pressable } from "react-native";
 import { useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@/src/theme";
 import { Button, Field } from "@/src/components/ui";
 import { restrictedRequest, setRestrictedToken } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
 export default function Suspended() {
+  const qc=useQueryClient();
   const { colors: c } = useTheme(),
     insets = useSafeAreaInsets(),
     router = useRouter(),
@@ -21,6 +22,8 @@ export default function Suspended() {
     refetchInterval: 15000,
   });
   async function leave() {
+    await qc.cancelQueries();
+    qc.clear();
     await setRestrictedToken(null);
     router.replace("/(auth)/login");
   }

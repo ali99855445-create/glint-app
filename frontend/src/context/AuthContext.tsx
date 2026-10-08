@@ -1,3 +1,4 @@
+import {queryClient} from "@/src/query-client";
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { api, setToken, getToken, setRestrictedToken } from "@/src/api/client";
 
@@ -62,6 +63,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   const loginWithToken = useCallback(async (token: string, u: User) => {
+    await queryClient.cancelQueries();
+    queryClient.clear();
     await setRestrictedToken(null);
     await setToken(token);
     setUserState(u);
@@ -69,6 +72,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   const logout = useCallback(async () => {
+    await queryClient.cancelQueries();
+    queryClient.clear();
     await setToken(null);
     setUserState(null);
   }, []);

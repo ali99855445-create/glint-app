@@ -16,7 +16,7 @@ export default function Login() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const toast = useToast();
-  const { loginWithToken } = useAuth();
+  const { loginWithToken, logout } = useAuth();
 
   const [contact, setContact] = useState("");
   const [password, setPassword] = useState("");
@@ -31,7 +31,7 @@ export default function Login() {
     setLoading(true);
     try {
       const res = await api.post("/auth/login", { contact: contact.trim(), password, second_factor: secondFactor || undefined });
-      if(res.restricted){await setRestrictedToken(res.appeal_token);router.replace("/account-suspended");return;}
+      if(res.restricted){await logout();await setRestrictedToken(res.appeal_token);router.replace("/account-suspended");return;}
       await loginWithToken(res.token, res.user);
       router.replace("/(tabs)");
     } catch (e: any) {
