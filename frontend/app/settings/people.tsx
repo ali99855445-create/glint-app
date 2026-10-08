@@ -24,6 +24,7 @@ export default function People() {
     queryFn: () => api.get("/users/search?q=" + encodeURIComponent(q)),
     enabled: q.trim().length > 0,
   });
+  const selected=useQuery({queryKey:["privacy-selected",key],queryFn:()=>api.get("/account/privacy-people?kind="+key)});
   const friends = useQuery({
     queryKey: ["friends"],
     queryFn: () => api.get("/friends"),
@@ -36,6 +37,7 @@ export default function People() {
     try {
       await api.put("/account/settings", { values: { [key]: next } });
       await settings.refetch();
+      await selected.refetch();
       toast.show("Preference saved", "success");
     } catch (e: any) {
       toast.show(e.message, "error");
@@ -69,12 +71,8 @@ export default function People() {
           </Text>
         </Pressable>
       ))}
-      <Text style={{ color: c.muted }}>Selected account IDs</Text>
-      {settings.data?.[key]?.map((id: string) => (
-        <Pressable key={id} onPress={() => toggle(id)}>
-          <Text style={{ color: c.brand }}>{id} · Remove</Text>
-        </Pressable>
-      ))}
+      <Text style={{ color: c.muted }}>Selected people</Text>
+      {selected.data?.map((person:any)=><Pressable key={person.id} onPress={()=>toggle(person.id)}><Text style={{color:c.brand}}>{person.name||'Unavailable account'}{person.username?' · @'+person.username:''} · Remove</Text></Pressable>)}
     </ScrollView>
   );
 }

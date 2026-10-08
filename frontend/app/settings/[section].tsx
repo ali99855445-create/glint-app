@@ -165,6 +165,7 @@ export default function SettingsSection() {
           {(
             {
               account: "Account information",
+              profile: "Profile information",
               security: "Login & security",
               notifications: "Notifications",
               followers: "Followers & following",
@@ -175,10 +176,10 @@ export default function SettingsSection() {
         </Text>
       </View>
       {settings.isLoading && <ActivityIndicator color={c.brand} />}
-      {section === "account" && (
+      {(section === "account" || section === "profile") && (
         <>
           <Pressable
-            onPress={() => router.push("/edit-profile")}
+            onPress={() => router.push(section === "account" ? "/settings/profile" : "/edit-profile")}
             style={{
               padding: 16,
               flexDirection: "row",
