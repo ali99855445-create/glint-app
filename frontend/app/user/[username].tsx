@@ -30,7 +30,7 @@ export default function UserProfile() {
   const [menu, setMenu] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
 
-  const profile = useQuery({ queryKey: ["profile", username], queryFn: () => api.get(`/users/${username}`), refetchInterval:15000 });
+  const profile = useQuery({ queryKey: ["profile", username], queryFn: () => api.get(`/users/${username}`), refetchInterval:15000,retry:false });
   const data = profile.data;
 
   const refetch = () => profile.refetch();
@@ -67,7 +67,7 @@ export default function UserProfile() {
     setMenu(false);
   }
 
-  if(profile.isError){return <View style={[styles.root,styles.center]}><Text style={{color:colors.onSurface,fontSize:24,fontWeight:'600'}}>Account not found</Text><Text style={{color:colors.muted,margin:16}}>This profile is unavailable.</Text><Button title="Go back" onPress={()=>router.back()}/></View>;}
+  if(profile.isError){return <View style={[styles.root,styles.center]}><Text style={{color:colors.onSurface,fontSize:24,fontWeight:'600'}}>{(profile.error as any)?.message?.includes("Account not found")?"Account not found":"Unable to load profile"}</Text><Text style={{color:colors.muted,margin:16}}>{(profile.error as any)?.message?.includes("Account not found")?"This profile is unavailable.":"Check your connection and try again."}</Text><Button title="Go back" onPress={()=>router.back()}/></View>;}
   if (profile.isLoading || !data) {
     return <View style={[styles.root, styles.center]}><ActivityIndicator color={colors.brandPrimary} size="large" /></View>;
   }

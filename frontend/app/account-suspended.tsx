@@ -90,9 +90,9 @@ export default function Suspended() {
                   ? "Under review by the Glint Team"
                   : a.status}
               </Text>
-              {a.response && (
+              {(a.note||a.response) && (
                 <Text style={{ color: c.muted, marginTop: 8 }}>
-                  {a.response}
+                  {a.note||a.response}
                 </Text>
               )}
             </View>

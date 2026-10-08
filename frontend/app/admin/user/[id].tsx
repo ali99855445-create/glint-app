@@ -47,7 +47,6 @@ export default function AdminUserDetail() {
 
   const [action, setAction] = useState<PendingAction | null>(null);
   const [reason, setReason] = useState("");
-  const [days, setDays] = useState("7");
   const [postingDays, setPostingDays] = useState("7");
   const [messagingDays, setMessagingDays] = useState("7");
 
@@ -102,7 +101,7 @@ export default function AdminUserDetail() {
       const why = reason.trim() || "Glint Team action";
       switch (action.kind) {
         case "suspend":
-          return api.post(`/admin/users/${id}/suspend`, { reason: why, duration_days: Math.max(0, Number(days) || 0) }, true);
+          return api.post(`/admin/users/${id}/suspend`, { reason: why }, true);
         case "restore":
           return api.post(`/admin/users/${id}/restore`, { reason: why }, true);
         case "grant":
@@ -142,7 +141,6 @@ export default function AdminUserDetail() {
       toast.show(deletedAccount ? "Account permanently removed" : "Admin action completed", "success");
       setAction(null);
       setReason("");
-      setDays("7");
       setPostingDays("7");
       setMessagingDays("7");
       qc.invalidateQueries({ queryKey: ["admin-users"] });
@@ -157,7 +155,6 @@ export default function AdminUserDetail() {
   function openAction(next: PendingAction, defaultReason = "") {
     setAction(next);
     setReason(defaultReason);
-    setDays("7");
     setPostingDays("7");
     setMessagingDays("7");
   }
@@ -440,16 +437,7 @@ export default function AdminUserDetail() {
             <Text style={styles.modalTitle}>{action?.title}</Text>
             <Text style={styles.modalHint}>The reason is saved to the admin audit log and is shown to the user where applicable.</Text>
 
-            {action?.kind === "suspend" && (
-              <TextInput
-                value={days}
-                onChangeText={setDays}
-                keyboardType="number-pad"
-                placeholder="Suspension days (0 = long-term)"
-                placeholderTextColor={colors.muted}
-                style={styles.input}
-              />
-            )}
+            {action?.kind === "suspend" && <Text style={styles.modalHint}>This account will remain suspended until you restore it. Its profile will be hidden and it can submit an appeal.</Text>}
 
             {action?.kind === "restrict" && (
               <>
