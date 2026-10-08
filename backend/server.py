@@ -4857,6 +4857,13 @@ async def archived_posts(me=Depends(get_current_user)):
         .limit(200)
     ]
 
+@api.get('/account/privacy-people')
+async def privacy_people(kind:str=Query(...),me=Depends(get_current_user)):
+    if kind not in {'hidden_story_users','muted_users'}: raise HTTPException(400,'Invalid people list')
+    ids=me.get('settings',{}).get(kind,[])
+    people={u['id']:u async for u in db.users.find({'id':{'$in':ids},'deleted_at':None,'suspended':{'$ne':True},'deactivated':{'$ne':True}},{'_id':0,'id':1,'full_name':1,'username':1})}
+    return [{'id':uid,'name':people.get(uid,{}).get('full_name'),'username':people.get(uid,{}).get('username')} for uid in ids]
+
 app.include_router(api)
 
 app.add_middleware(

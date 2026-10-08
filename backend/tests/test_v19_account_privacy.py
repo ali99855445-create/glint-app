@@ -95,3 +95,17 @@ class AccountTests(IsolatedAsyncioTestCase):
         self.db.users.update_one.assert_not_awaited()
     async def test_archived_post_hidden_even_from_normal_profile_feed(self):
         self.assertFalse(await server.can_view_post({'author_id':'a','archived':True},self.me,'a',set()))
+    async def test_people_preferences_accept_only_own_supported_list(self):
+        with self.assertRaises(HTTPException):await server.privacy_people('another_users_contacts',self.me)
+    async def test_people_preferences_show_names_without_reviving_hidden_accounts(self):
+        from unittest.mock import Mock
+        class Cursor:
+            def __aiter__(self):
+                async def iterate():
+                    yield {'id':'b','full_name':'Friend','username':'friend'}
+                return iterate()
+        self.db.users.find=Mock(return_value=Cursor())
+        result=await server.privacy_people('muted_users',{**self.me,'settings':{'muted_users':['b','removed']}})
+        self.assertEqual(result,[{'id':'b','name':'Friend','username':'friend'},{'id':'removed','name':None,'username':None}])
+        query=self.db.users.find.call_args.args[0]
+        self.assertEqual(query['id'],{'$in':['b','removed']});self.assertEqual(query['suspended'],{'$ne':True})
