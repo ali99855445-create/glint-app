@@ -1,3 +1,4 @@
+import { ProfileDetails } from "@/src/components/ProfileDetails";
 import React, { useState } from "react";
 import { View, Text, FlatList, Pressable, ActivityIndicator, Share } from "react-native";
 import { Image } from "expo-image";
@@ -66,6 +67,7 @@ export default function UserProfile() {
     setMenu(false);
   }
 
+  if(profile.isError){return <View style={[styles.root,styles.center]}><Text style={{color:colors.onSurface,fontSize:24,fontWeight:'600'}}>Account not found</Text><Text style={{color:colors.muted,margin:16}}>This profile is unavailable.</Text><Button title="Go back" onPress={()=>router.back()}/></View>;}
   if (profile.isLoading || !data) {
     return <View style={[styles.root, styles.center]}><ActivityIndicator color={colors.brandPrimary} size="large" /></View>;
   }
@@ -127,7 +129,7 @@ export default function UserProfile() {
 
       <View style={styles.infoWrap}>
         <View style={styles.avatarRow}>
-          <View style={styles.avatarBorder}><Avatar uri={data.avatar} name={data.full_name} size={92} /></View>
+          <View style={styles.avatarBorder}><Avatar uri={data.avatar} name={data.full_name} character={data.avatar_character} size={92} /></View>
           <View style={styles.actionBtns}>
             <Button
               title={data.is_following ? "Following" : "Follow"}
@@ -138,7 +140,7 @@ export default function UserProfile() {
               testID="user-follow"
             />
             {friendAction()}
-            {data.friend_status === "friends" && (
+            {(
               <Button title="Message" small variant="secondary" onPress={() => router.push(`/chat/${data.id}`)} testID="user-message" />
             )}
           </View>
@@ -209,7 +211,7 @@ export default function UserProfile() {
             <Text style={styles.privateSub}>{data.privacy === "only_me" ? "Only this user can see their posts." : "Become friends to see their posts."}</Text>
           </View>
         )}
-        {data.can_view && <Text style={styles.postsHeader}>Posts</Text>}
+        <ProfileDetails details={data.details} avatar={data.avatar_character}/>{data.can_view && <Text style={styles.postsHeader}>Posts</Text>}
       </View>
     </View>
   );

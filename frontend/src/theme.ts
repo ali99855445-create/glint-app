@@ -3,30 +3,30 @@ import { StyleSheet } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export type ColorScheme = "light" | "dark";
-const gold = "#D4AF37";
+const gold = "#1877F2";
 
 const light = {
-  surface: "#FFFFFF", onSurface: "#111111", surfaceSecondary: "#F8F6F0", onSurfaceSecondary: "#35312A",
-  surfaceTertiary: "#F3EBD2", onSurfaceTertiary: "#6A5520", surfaceInverse: "#0B0B0B", onSurfaceInverse: "#FFFFFF",
-  muted: "#746F65", brand: "#C89B2C", onBrand: "#111111", brandPrimary: gold, onBrandPrimary: "#111111",
-  brandSecondary: "#B88918", onBrandSecondary: "#111111", brandTertiary: "#F6EDCF", onBrandTertiary: "#6B5010",
+  surface: "#FFFFFF", onSurface: "#111111", surfaceSecondary: "#F5F6F7", onSurfaceSecondary: "#30343B",
+  surfaceTertiary: "#EEF2F6", onSurfaceTertiary: "#65676B", surfaceInverse: "#0B0B0B", onSurfaceInverse: "#FFFFFF",
+  muted: "#65676B", brand: "#1877F2", onBrand: "#FFFFFF", brandPrimary: gold, onBrandPrimary: "#FFFFFF",
+  brandSecondary: "#166FE5", onBrandSecondary: "#FFFFFF", brandTertiary: "#E7F3FF", onBrandTertiary: "#135DB8",
   success: "#24915A", onSuccess: "#FFFFFF", warning: "#D99A16", onWarning: "#111111", error: "#D74747",
-  onError: "#FFFFFF", info: "#3B82F6", onInfo: "#FFFFFF", border: "#E5DDC8", borderStrong: "#CFC2A1", divider: "#EEE8D9",
+  onError: "#FFFFFF", info: "#3B82F6", onInfo: "#FFFFFF", border: "#DADDE1", borderStrong: "#BEC3C9", divider: "#E4E6EB",
 };
 
 const dark: typeof light = {
-  surface: "#050505", onSurface: "#F7F3E8", surfaceSecondary: "#10100F", onSurfaceSecondary: "#DED7C7",
-  surfaceTertiary: "#1C1911", onSurfaceTertiary: "#D9C27B", surfaceInverse: "#F7F3E8", onSurfaceInverse: "#090909",
-  muted: "#AAA18D", brand: gold, onBrand: "#090909", brandPrimary: gold, onBrandPrimary: "#090909",
-  brandSecondary: "#E0BE55", onBrandSecondary: "#090909", brandTertiary: "#29220F", onBrandTertiary: "#F0D77E",
+  surface: "#18191A", onSurface: "#E4E6EB", surfaceSecondary: "#242526", onSurfaceSecondary: "#E4E6EB",
+  surfaceTertiary: "#3A3B3C", onSurfaceTertiary: "#B0B3B8", surfaceInverse: "#F7F3E8", onSurfaceInverse: "#090909",
+  muted: "#B0B3B8", brand: gold, onBrand: "#090909", brandPrimary: gold, onBrandPrimary: "#FFFFFF",
+  brandSecondary: "#4599FF", onBrandSecondary: "#090909", brandTertiary: "#203C59", onBrandTertiary: "#B5D9FF",
   success: "#3DBA78", onSuccess: "#07140D", warning: "#E6B33F", onWarning: "#111111", error: "#F06464",
-  onError: "#190606", info: "#60A5FA", onInfo: "#07101C", border: "#302A1B", borderStrong: "#574923", divider: "#242017",
+  onError: "#190606", info: "#60A5FA", onInfo: "#07101C", border: "#3E4042", borderStrong: "#5B5D60", divider: "#3E4042",
 };
 
 export type ThemeColors = typeof light;
-export const defaultScheme: ColorScheme = "dark";
+export const defaultScheme: ColorScheme = "light";
 export const themes: { light: ThemeColors; dark: ThemeColors } = { light, dark };
-const THEME_KEY = "glint.theme.scheme";
+const THEME_KEY = "glint.theme.scheme.v19";
 let activeScheme: ColorScheme = defaultScheme;
 const listeners = new Set<(scheme: ColorScheme) => void>();
 let loaded = false;
@@ -61,14 +61,14 @@ export function useThemeScheme(): ColorScheme {
 
 export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, "2xl": 32, "3xl": 48 };
 export const radius = { sm: 8, md: 16, lg: 24, pill: 999 };
-export const fonts = { display: "Outfit-SemiBold", displayBold: "Outfit-Bold", displayRegular: "Outfit-Regular", text: "Figtree-Regular", medium: "Figtree-Medium", semibold: "Figtree-SemiBold" };
+export const fonts = { display: "sans-serif-medium", displayBold: "sans-serif-medium", displayRegular: "sans-serif", text: "sans-serif", medium: "sans-serif-medium", semibold: "sans-serif-medium" };
 
 export const REACTIONS: { key: string; emoji: string; label: string; color: string }[] = [
   { key: "like", emoji: "👍", label: "Like", color: "#EAB308" }, { key: "love", emoji: "❤️", label: "Love", color: "#EF4444" },
   { key: "haha", emoji: "😂", label: "Haha", color: "#F5B942" }, { key: "wow", emoji: "😮", label: "Wow", color: "#F59E0B" },
   { key: "sad", emoji: "😢", label: "Sad", color: "#60A5FA" }, { key: "angry", emoji: "😡", label: "Angry", color: "#DC2626" },
 ];
-export const STORY_BG_COLORS = [gold, "#B88918", "#000000", "#EF4444", "#8B5CF6", "#EC4899", "#F97316", "#1A1A1A", "#059669", "#DB2777"];
+export const STORY_BG_COLORS = [gold, "#166FE5", "#000000", "#EF4444", "#8B5CF6", "#EC4899", "#F97316", "#1A1A1A", "#059669", "#DB2777"];
 
 export function useTheme(): { scheme: ColorScheme; colors: ThemeColors } {
   const scheme = useThemeScheme();

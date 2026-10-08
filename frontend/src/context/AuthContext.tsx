@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { api, setToken, getToken } from "@/src/api/client";
+import { api, setToken, getToken, setRestrictedToken } from "@/src/api/client";
 
 export type User = {
   id: string;
@@ -62,6 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   const loginWithToken = useCallback(async (token: string, u: User) => {
+    await setRestrictedToken(null);
     await setToken(token);
     setUserState(u);
     await refresh();

@@ -23,6 +23,7 @@ export default function Help() {
   const tickets = useQuery({ queryKey: ["tickets"], queryFn: () => api.get("/tickets/me") });
   useFocusEffect(React.useCallback(() => { tickets.refetch(); }, []));
 
+  const [category,setCategory]=useState("Account access");
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
   const [screenshot, setScreenshot] = useState<string | null>(null);
@@ -42,7 +43,7 @@ export default function Help() {
     if (!subject.trim() || !description.trim()) return toast.show("Fill in subject and description", "error");
     setSubmitting(true);
     try {
-      await api.post("/tickets", { subject: subject.trim(), description: description.trim(), screenshot });
+      await api.post("/tickets", { subject: `[${category}] ${subject.trim()}`, description: description.trim(), screenshot });
       toast.show("Your support request is under review by the Glint Team", "success");
       setSubject(""); setDescription(""); setScreenshot(null);
       tickets.refetch();
@@ -63,6 +64,7 @@ export default function Help() {
 
       <KeyboardAwareScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.md, paddingBottom: spacing["2xl"] }} keyboardShouldPersistTaps="handled" bottomOffset={20}>
         <Text style={styles.sectionTitle}>Describe your issue</Text>
+        <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{['Account access','Payments & Blue Tick','Messages','Posts & stories','Privacy & safety','Report a problem'].map(v=><Pressable key={v} onPress={()=>setCategory(v)} style={{padding:10,borderRadius:12,backgroundColor:category===v?colors.brandTertiary:colors.surfaceSecondary}}><Text style={{color:colors.onSurface}}>{v}</Text></Pressable>)}</View>
         <Field value={subject} onChangeText={setSubject} placeholder="Subject" testID="help-subject" />
         <Field value={description} onChangeText={setDescription} placeholder="Tell us what's happening..." multiline testID="help-description" />
         <Pressable style={styles.attach} onPress={attach} testID="help-attach">

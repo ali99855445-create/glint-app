@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { View, Text, Pressable, ScrollView, ActivityIndicator, Modal } from "react-native";
 import { Image } from "expo-image";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -25,13 +25,14 @@ export default function CreatePost() {
   const qc = useQueryClient();
   const { user } = useAuth();
 
+  useEffect(()=>{api.get('/account/settings').then(v=>setAudience(v.posts_audience)).catch(()=>{});},[]);
   const [mode, setMode] = useState<Mode>("text");
   const [text, setText] = useState("");
   const [image, setImage] = useState<string | null>(null);
   const [options, setOptions] = useState<string[]>(["", ""]);
   const [uploading, setUploading] = useState(false);
   const [posting, setPosting] = useState(false);
-  const [audience, setAudience] = useState<"public" | "friends" | "inner">("public");
+  const [audience, setAudience] = useState<"public" | "friends" | "inner" | "only_me">("public");
   const [aiOpen, setAiOpen] = useState(false);
   const [aiTone, setAiTone] = useState("witty");
   const [aiLoading, setAiLoading] = useState(false);
@@ -112,6 +113,7 @@ export default function CreatePost() {
           {([
             { k: "public", icon: "earth", label: "Public" },
             { k: "friends", icon: "people", label: "Friends" },
+            { k: "only_me", icon: "lock-closed", label: "Only me" },
             { k: "inner", icon: "star", label: "Inner Circle" },
           ] as const).map((a) => (
             <Pressable key={a.k} onPress={() => setAudience(a.k)} style={[styles.audChip, audience === a.k && { backgroundColor: colors.brandPrimary }]} testID={`create-audience-${a.k}`}>

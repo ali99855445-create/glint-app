@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, Modal, Share } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Modal, Share, TextInput } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -11,9 +11,12 @@ import { useAuth } from "@/src/context/AuthContext";
 import { api } from "@/src/api/client";
 import { appShareUrl } from "@/src/lib/shareLinks";
 
+const SettingsSearch=React.createContext("");
 function Row({ icon, label, value, onPress, danger, testID, rightEl }: any) {
   const styles = useStyles();
   const { colors } = useTheme();
+  const search=React.useContext(SettingsSearch);
+  if(search&&!label.toLowerCase().includes(search.toLowerCase()))return null;
   return (
     <Pressable style={styles.row} onPress={onPress} testID={testID}>
       <View style={[styles.rowIcon, { backgroundColor: danger ? colors.error + "22" : colors.brandTertiary }]}>
@@ -33,6 +36,7 @@ export default function Settings() {
   const toast = useToast();
   const qc = useQueryClient();
   const { user, refresh, logout } = useAuth();
+  const [search,setSearch]=useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [privacyPicker, setPrivacyPicker] = useState<"profile" | "contact" | null>(null);
 
@@ -84,9 +88,16 @@ export default function Settings() {
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl, gap: spacing.xl }}>
+      <TextInput value={search} onChangeText={setSearch} placeholder="Search settings" placeholderTextColor={colors.muted} style={{margin:16,padding:14,backgroundColor:colors.surfaceSecondary,borderRadius:24,color:colors.onSurface}}/>
+      <SettingsSearch.Provider value={search}><ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl, gap: spacing.xl }}>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
+          <Row icon="person-circle-outline" label="Account information" onPress={()=>router.push('/settings/account')} />
+          <Row icon="shield-checkmark-outline" label="Login & security" onPress={()=>router.push('/settings/security')} />
+          <Row icon="notifications-outline" label="Notification settings" onPress={()=>router.push('/settings/notifications')} />
+          <Row icon="people-outline" label="Followers & following" onPress={()=>router.push('/settings/followers')} />
+          <Row icon="options-outline" label="Posts, stories & messages" onPress={()=>router.push('/settings/privacy')} />
+          <Row icon="cloud-download-outline" label="Your activity & information" onPress={()=>router.push('/settings/activity')} />
           <Pressable style={styles.contactSummary} accessibilityRole="button" onPress={()=>router.push("/account-contact")} testID="settings-account-contact">
             <Text style={styles.contactSummaryTitle}>Account contact</Text>
             <View style={styles.contactLine}>
@@ -149,8 +160,8 @@ export default function Settings() {
           <Row icon="trash-outline" label="Delete account" danger onPress={() => setConfirmDelete(true)} testID="settings-delete" />
         </View>
 
-        <Text style={styles.version}>Glint v1.0.17 · @{user?.username}</Text>
-      </ScrollView>
+        <Text style={styles.version}>Glint v1.0.19 · @{user?.username}</Text>
+      </ScrollView></SettingsSearch.Provider>
 
       <Modal visible={!!privacyPicker} transparent animationType="fade" onRequestClose={() => setPrivacyPicker(null)}>
         <View style={styles.modalOverlay}>

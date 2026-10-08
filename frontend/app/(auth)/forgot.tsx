@@ -32,7 +32,7 @@ export default function Forgot() {
       const res = await api.post("/auth/forgot", { contact: contact.trim() });
       setUserId(res.user_id);
       setStage("reset");
-      toast.show(`Reset code: ${res.dev_otp}`, "info");
+      toast.show(res.dev_otp?`Reset code: ${res.dev_otp}`:"Reset code sent to your contact", "info");
     } catch (e: any) {
       toast.show(e.message, "error");
     } finally {
@@ -41,10 +41,11 @@ export default function Forgot() {
   }
 
   async function reset() {
-    if (code.trim().length < 6 || password.length < 6) return toast.show("Enter the code and a new 6+ char password", "error");
+    if (code.trim().length < 6 || password.length < 8) return toast.show("Enter the code and a new 8+ char password", "error");
     setLoading(true);
     try {
       const res = await api.post("/auth/reset", { user_id: userId, code: code.trim(), password });
+      if(res.requires_login){toast.show("Password reset. Please sign in with your two-step code if enabled.","success");router.replace("/(auth)/login");return;}
       await loginWithToken(res.token, res.user);
       toast.show("Password reset!", "success");
       router.replace("/(tabs)");

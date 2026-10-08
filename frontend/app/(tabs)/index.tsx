@@ -10,41 +10,21 @@ import { StoryBar } from "@/src/components/StoryBar";
 import { Icon } from "@/src/components/Icon";
 import { Button } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
+import { useAuth } from "@/src/context/AuthContext";
+import { Avatar } from "@/src/components/Avatar";
 import { usesNativeTabs } from "@/src/navigation";
-
-function useCountdown(target?: string | null) {
-  const [label, setLabel] = React.useState("");
-  React.useEffect(() => {
-    if (!target) return;
-    const tick = () => {
-      const diff = Math.max(0, new Date(target).getTime() - Date.now());
-      const h = Math.floor(diff / 3600000);
-      const m = Math.floor((diff % 3600000) / 60000);
-      const s = Math.floor((diff % 60000) / 1000);
-      setLabel(h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`);
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [target]);
-  return label;
-}
 
 export default function Home() {
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const {user}=useAuth();
   const toast = useToast();
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
 
   const feed = useQuery({ queryKey: ["feed"], queryFn: () => api.get("/posts/feed") });
   const stories = useQuery({ queryKey: ["stories"], queryFn: () => api.get("/stories/feed") });
-  const config = useQuery({ queryKey: ["config"], queryFn: () => api.get("/config") });
-  const unread = useQuery({ queryKey: ["unread-count"], queryFn: () => api.get("/notifications/unread-count"), refetchInterval: 15000 });
-  const unreadCount = unread.data?.count || 0;
-  const golden = useQuery({ queryKey: ["golden-status"], queryFn: () => api.get("/golden/status"), refetchInterval: 60000 });
-
   React.useEffect(() => {
     (async () => {
       try {
@@ -56,53 +36,8 @@ export default function Home() {
   }, []);
 
   const refreshing = feed.isRefetching || stories.isRefetching;
-  const broadcast = config.data?.broadcast;
-  const gActive = golden.data?.active;
-  const countdown = useCountdown(gActive ? golden.data?.ends_at : golden.data?.next_start);
-
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
-      {/* sticky header */}
-      <View style={styles.header}>
-        <Text style={styles.logo}>Glint</Text>
-        <View style={styles.headerActions}>
-          <Pressable onPress={() => router.push("/notifications")} style={styles.headerBtn} testID="home-notifications">
-            <Icon name="notifications-outline" size={22} color={colors.onSurface} />
-            {unreadCount > 0 && (
-              <View style={styles.badge} testID="home-notif-badge">
-                <Text style={styles.badgeText}>{unreadCount > 9 ? "9+" : unreadCount}</Text>
-              </View>
-            )}
-          </Pressable>
-          <Pressable onPress={() => router.push("/search")} style={styles.headerBtn} testID="home-search">
-            <Icon name="search" size={22} color={colors.onSurface} />
-          </Pressable>
-          <Pressable onPress={() => router.push("/(tabs)/chat")} style={styles.headerBtn} testID="home-chat">
-            <Icon name="paper-plane-outline" size={22} color={colors.onSurface} />
-          </Pressable>
-        </View>
-      </View>
-
-      {broadcast?.active && (
-        <View style={styles.broadcast} testID="broadcast-banner">
-          <Icon name="megaphone" size={18} color={colors.onBrandSecondary} />
-          <Text style={styles.broadcastText}>{broadcast.message}</Text>
-        </View>
-      )}
-
-      <Pressable style={[styles.golden, gActive && styles.goldenActive]} onPress={() => router.push("/golden")} testID="golden-hour-banner">
-        <Icon name="sparkles" size={20} color={gActive ? colors.onBrandSecondary : colors.brandSecondary} />
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.goldenTitle, gActive && { color: colors.onBrandSecondary }]}>
-            {gActive ? "Golden Hour is LIVE ✨" : "Golden Hour"}
-          </Text>
-          <Text style={[styles.goldenSub, gActive && { color: colors.onBrandSecondary }]}>
-            {gActive ? `Post now for the Golden Feed · ends in ${countdown}` : `Starts in ${countdown} · tap to see the glow`}
-          </Text>
-        </View>
-        <Icon name="chevron-forward" size={18} color={gActive ? colors.onBrandSecondary : colors.brandSecondary} />
-      </Pressable>
-
+    <View style={[styles.root, { paddingTop: 0 }]}>
       {feed.isLoading ? (
         <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} size="large" /></View>
       ) : (
@@ -110,11 +45,11 @@ export default function Home() {
           data={feed.data || []}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => <PostCard post={item} />}
-          ListHeaderComponent={<StoryBar groups={stories.data || []} />}
+          ListHeaderComponent={<View><View style={{flexDirection:'row',alignItems:'center',gap:12,padding:16}}><Pressable onPress={()=>router.push('/(tabs)/profile')}><Avatar uri={user?.avatar} name={user?.full_name} size={42}/></Pressable><Pressable style={{flex:1,borderWidth:1,borderColor:colors.border,borderRadius:24,padding:12}} onPress={()=>router.push('/post/create')}><Text style={{color:colors.onSurface,fontSize:16}}>What's on your mind?</Text></Pressable></View><StoryBar groups={stories.data || []}/></View>}
           contentContainerStyle={{ paddingBottom: bottomChrome + 100, gap: spacing.md }}
           ItemSeparatorComponent={() => <View style={{ height: spacing.md }} />}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { feed.refetch(); stories.refetch(); config.refetch(); }} tintColor={colors.brandPrimary} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { feed.refetch(); stories.refetch(); }} tintColor={colors.brandPrimary} />}
           ListEmptyComponent={
             <View style={styles.empty}>
               <Icon name="planet-outline" size={64} color={colors.muted} />

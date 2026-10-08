@@ -1,71 +1,124 @@
 import React from "react";
-import { Platform } from "react-native";
-import { Tabs } from "expo-router";
-import { NativeTabs } from "expo-router/unstable-native-tabs";
-import * as Haptics from "expo-haptics";
+import { View, Text, Pressable } from "react-native";
+import { Tabs, useRouter, usePathname } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useTheme } from "@/src/theme";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/src/api/client";
-import { useAuth } from "@/src/context/AuthContext";
-import { useTheme, fonts } from "@/src/theme";
-import { usesNativeTabs } from "@/src/navigation";
 import { Icon } from "@/src/components/Icon";
-
 export default function TabsLayout() {
-  const { colors } = useTheme();
-  const { signedIn } = useAuth();
+  const { colors: c } = useTheme(),
+    router = useRouter(),
+    path = usePathname(),
+    insets = useSafeAreaInsets();
+  const notifications = useQuery({
+    queryKey: ["unread-count"],
+    queryFn: () => api.get("/notifications/unread-count"),
+    refetchInterval: 15000,
+  });
   const requests = useQuery({
     queryKey: ["friend-requests"],
     queryFn: () => api.get("/friends/requests"),
-    enabled: signedIn,
-    refetchInterval: 20000,
+    refetchInterval: 15000,
   });
-  const requestCount = requests.data?.incoming?.length || 0;
-
-  if (usesNativeTabs) {
-    return (
-      <NativeTabs>
-        <NativeTabs.Trigger name="index">
-          <NativeTabs.Trigger.Icon sf="house.fill" />
-          <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
-        </NativeTabs.Trigger>
-        <NativeTabs.Trigger name="friends">
-          <NativeTabs.Trigger.Icon sf="person.2.fill" />
-          <NativeTabs.Trigger.Label>Friends</NativeTabs.Trigger.Label>
-        </NativeTabs.Trigger>
-        <NativeTabs.Trigger name="chat">
-          <NativeTabs.Trigger.Icon sf="message.fill" />
-          <NativeTabs.Trigger.Label>Chats</NativeTabs.Trigger.Label>
-        </NativeTabs.Trigger>
-        <NativeTabs.Trigger name="profile">
-          <NativeTabs.Trigger.Icon sf="person.crop.circle.fill" />
-          <NativeTabs.Trigger.Label>Profile</NativeTabs.Trigger.Label>
-        </NativeTabs.Trigger>
-      </NativeTabs>
-    );
-  }
-
+  const items = [
+    ["Home", "home", "/"],
+    ["Requests", "people", "/friends"],
+    ["Chats", "chatbubble-ellipses", "/chat"],
+    ["Profile", "person", "/profile"],
+    ["Notifications", "notifications", "/notifications-tab"],
+  ];
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: colors.brandPrimary,
-        tabBarInactiveTintColor: colors.muted,
-        tabBarStyle: {
-          backgroundColor: colors.surfaceSecondary,
-          borderTopColor: colors.border,
-          ...(Platform.OS === "web" ? { height: 64 } : {}),
-        },
-        tabBarItemStyle: { alignSelf: "center" },
-        tabBarLabelStyle: { fontFamily: fonts.medium, fontSize: 11 },
-      }}
-      screenListeners={{
-        tabPress: () => Haptics.selectionAsync().catch(() => {}),
-      }}
+    <View
+      style={{ flex: 1, backgroundColor: c.surface, paddingTop: insets.top }}
     >
-      <Tabs.Screen name="index" options={{ title: "Home", tabBarIcon: ({ color, size }) => <Icon name="home" size={size} color={color} /> }} />
-      <Tabs.Screen name="friends" options={{ title: "Friends", tabBarBadge: requestCount > 0 ? requestCount : undefined, tabBarBadgeStyle: { backgroundColor: colors.error, color: colors.onError, fontSize: 10 }, tabBarIcon: ({ color, size }) => <Icon name="people" size={size} color={color} /> }} />
-      <Tabs.Screen name="chat" options={{ title: "Chats", tabBarIcon: ({ color, size }) => <Icon name="chatbubble-ellipses" size={size} color={color} /> }} />
-      <Tabs.Screen name="profile" options={{ title: "Profile", tabBarIcon: ({ color, size }) => <Icon name="person" size={size} color={color} /> }} />
-    </Tabs>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          padding: 12,
+          gap: 12,
+        }}
+      >
+        <Text style={{ color: c.brand, fontSize: 30, fontWeight: "700" }}>
+          Glint
+        </Text>
+        <Pressable
+          accessibilityRole="search"
+          onPress={() => router.push("/search")}
+          style={{
+            flex: 1,
+            backgroundColor: c.surfaceSecondary,
+            borderRadius: 24,
+            padding: 12,
+            flexDirection: "row",
+            gap: 8,
+          }}
+        >
+          <Icon name="search" size={20} color={c.muted} />
+          <Text style={{ color: c.muted }}>Search Glint</Text>
+        </Pressable>
+      </View>
+      <View
+        style={{
+          flexDirection: "row",
+          borderBottomWidth: 1,
+          borderColor: c.border,
+        }}
+      >
+        {items.map(([label, icon, url]) => {
+          const active = path === url;
+          return (
+            <Pressable
+              key={url}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: active }}
+              onPress={() =>
+                router.navigate(
+                  (url === "/" ? "/(tabs)" : `/(tabs)${url}`) as any,
+                )
+              }
+              style={{
+                flex: 1,
+                alignItems: "center",
+                paddingVertical: 10,
+                borderBottomWidth: 3,
+                borderBottomColor: active ? c.brand : "transparent",
+              }}
+            >
+              <Icon
+                name={icon as any}
+                size={23}
+                color={active ? c.brand : c.muted}
+              />
+              <Text
+                style={{
+                  color: active ? c.brand : c.muted,
+                  fontSize: 10,
+                  marginTop: 4,
+                }}
+              >
+                {label}
+                {url === "/friends" && requests.data?.incoming?.length
+                  ? " (" + requests.data.incoming.length + ")"
+                  : ""}
+                {url === "/notifications-tab" && notifications.data?.count
+                  ? " (" + notifications.data.count + ")"
+                  : ""}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Tabs
+        screenOptions={{ headerShown: false, tabBarStyle: { display: "none" } }}
+      >
+        <Tabs.Screen name="index" />
+        <Tabs.Screen name="friends" />
+        <Tabs.Screen name="chat" />
+        <Tabs.Screen name="profile" />
+        <Tabs.Screen name="notifications-tab" />
+      </Tabs>
+    </View>
   );
 }

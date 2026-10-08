@@ -8,7 +8,7 @@ import { Button, Field } from "@/src/components/ui";
 import { Icon } from "@/src/components/Icon";
 import { useToast } from "@/src/components/Toast";
 import { useAuth } from "@/src/context/AuthContext";
-import { api } from "@/src/api/client";
+import { api, setRestrictedToken } from "@/src/api/client";
 
 export default function Login() {
   const styles = useStyles();
@@ -20,6 +20,7 @@ export default function Login() {
 
   const [contact, setContact] = useState("");
   const [password, setPassword] = useState("");
+  const [secondFactor, setSecondFactor] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function login() {
@@ -29,7 +30,8 @@ export default function Login() {
     }
     setLoading(true);
     try {
-      const res = await api.post("/auth/login", { contact: contact.trim(), password });
+      const res = await api.post("/auth/login", { contact: contact.trim(), password, second_factor: secondFactor || undefined });
+      if(res.restricted){await setRestrictedToken(res.appeal_token);router.replace("/account-suspended");return;}
       await loginWithToken(res.token, res.user);
       router.replace("/(tabs)");
     } catch (e: any) {
@@ -56,6 +58,7 @@ export default function Login() {
         <Field value={password} onChangeText={setPassword} placeholder="Password" secureTextEntry testID="login-password"
           icon={<Icon name="lock-closed-outline" size={20} color={colors.muted} />} />
 
+        <Field value={secondFactor} onChangeText={setSecondFactor} placeholder="Two-step code or recovery code (if enabled)" autoCapitalize="none" />
         <Pressable onPress={() => router.push("/(auth)/forgot")} testID="login-forgot">
           <Text style={styles.forgot}>Forgot password?</Text>
         </Pressable>

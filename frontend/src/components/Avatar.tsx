@@ -1,13 +1,15 @@
-import React from "react";
+import React, {useState,useEffect} from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { Image } from "expo-image";
 import { useTheme, fonts } from "@/src/theme";
 import { fileUrl } from "@/src/api/client";
 import { Icon } from "./Icon";
 
-export function Avatar({ uri, name, size = 44, ring }: { uri?: string | null; name?: string; size?: number; ring?: boolean }) {
+export function Avatar({ uri, name, size = 44, ring, character }: { character?:string; uri?: string | null; name?: string; size?: number; ring?: boolean }) {
   const { colors } = useTheme();
   const source = fileUrl(uri);
+  const [showCharacter,setShowCharacter]=useState(false);
+  useEffect(()=>{setShowCharacter(false);if(!character)return;const start=setTimeout(()=>setShowCharacter(true),700);const end=setTimeout(()=>setShowCharacter(false),2300);return()=>{clearTimeout(start);clearTimeout(end);};},[character,uri]);
   const initials = (name || "?")
     .split(" ")
     .map((w) => w[0])
@@ -22,7 +24,7 @@ export function Avatar({ uri, name, size = 44, ring }: { uri?: string | null; na
         ring && { borderWidth: 2, borderColor: colors.brandPrimary },
       ]}
     >
-      {source ? (
+      {showCharacter&&character?<Text style={{fontSize:size*0.6}}>{character}</Text>:source ? (
         <Image source={{ uri: source }} style={{ width: "100%", height: "100%" }} contentFit="cover" transition={200} />
       ) : (
         <Text style={{ color: colors.onBrandTertiary, fontFamily: fonts.displayBold, fontSize: size * 0.4 }}>{initials}</Text>

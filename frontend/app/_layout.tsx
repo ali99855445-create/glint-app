@@ -1,7 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { LogBox, View, ActivityIndicator } from "react-native";
-import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -23,23 +22,6 @@ function ThemedStatusBar() {
 }
 
 export default function RootLayout() {
-  const [fontsLoaded, fontError] = useFonts({
-    "Outfit-Regular": require("../assets/fonts/SpaceMono-Regular.ttf"),
-    "Outfit-SemiBold": require("../assets/fonts/SpaceMono-Regular.ttf"),
-    "Outfit-Bold": require("../assets/fonts/SpaceMono-Regular.ttf"),
-    "Figtree-Regular": require("../assets/fonts/SpaceMono-Regular.ttf"),
-    "Figtree-Medium": require("../assets/fonts/SpaceMono-Regular.ttf"),
-    "Figtree-SemiBold": require("../assets/fonts/SpaceMono-Regular.ttf"),
-  });
-
-  if (!fontsLoaded && !fontError) {
-    return (
-      <View style={{ flex: 1, backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator color="#67C587" />
-      </View>
-    );
-  }
-
   return (
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>

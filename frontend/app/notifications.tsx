@@ -1,6 +1,6 @@
 import React from "react";
 import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl } from "react-native";
-import { useRouter, useFocusEffect } from "expo-router";
+import { useRouter, useFocusEffect, usePathname } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { makeStyles, useTheme, fonts, spacing, radius } from "@/src/theme";
@@ -23,6 +23,7 @@ export default function Notifications() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const inTab=usePathname().endsWith("notifications-tab");
   const qc = useQueryClient();
 
   const notifs = useQuery({ queryKey: ["notifications"], queryFn: () => api.get("/notifications") });
@@ -60,7 +61,7 @@ export default function Notifications() {
   }
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
+    <View style={[styles.root, { paddingTop: inTab?0:insets.top }]}>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.iconBtn} testID="notif-back">
           <Icon name="chevron-back" size={26} color={colors.onSurface} />

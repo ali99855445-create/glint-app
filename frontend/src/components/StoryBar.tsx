@@ -1,96 +1,113 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { View, Text, Pressable, ScrollView } from "react-native";
-import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, Easing } from "react-native-reanimated";
-import { LinearGradient } from "expo-linear-gradient";
+import { Image } from "expo-image";
 import { useRouter } from "expo-router";
-import { makeStyles, useTheme, fonts, spacing } from "@/src/theme";
-import { Avatar } from "@/src/components/Avatar";
-import { Icon } from "@/src/components/Icon";
+import { useTheme } from "@/src/theme";
 import { useAuth } from "@/src/context/AuthContext";
-
-function SpinningRing({ children }: { children: React.ReactNode }) {
-  const { colors } = useTheme();
-  const rot = useSharedValue(0);
-  useEffect(() => {
-    rot.value = withRepeat(withTiming(1, { duration: 4000, easing: Easing.linear }), -1, false);
-  }, [rot]);
-  const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${rot.value * 360}deg` }] }));
-  return (
-    <View style={{ width: 70, height: 70, borderRadius: 35, alignItems: "center", justifyContent: "center" }}>
-      <Animated.View style={[{ position: "absolute", width: 70, height: 70, borderRadius: 35 }, style]}>
-        <LinearGradient colors={[colors.brandPrimary, colors.brandSecondary, colors.brandPrimary]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ width: 70, height: 70, borderRadius: 35 }} />
-      </Animated.View>
-      {children}
-    </View>
-  );
-}
-
+import { Avatar } from "@/src/components/Avatar";
+import { fileUrl } from "@/src/api/client";
 export function StoryBar({ groups }: { groups: any[] }) {
-  const styles = useStyles();
-  const { colors } = useTheme();
-  const router = useRouter();
-  const { user } = useAuth();
-
-  const mine = groups.find((g) => g.is_mine);
-  const others = groups.filter((g) => !g.is_mine);
-
+  const { colors: c } = useTheme(),
+    { user } = useAuth(),
+    router = useRouter();
+  const card = {
+    width: 124,
+    height: 200,
+    borderRadius: 14,
+    overflow: "hidden" as const,
+    backgroundColor: c.surfaceSecondary,
+    borderWidth: 1,
+    borderColor: c.border,
+  };
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
-      {/* your story / add */}
-      <Pressable
-        style={styles.item}
-        testID="story-add"
-        onPress={() => (mine ? router.push(`/story/${user?.id}`) : router.push("/story/create"))}
-      >
-        <View style={styles.ringWrap}>
-          {mine && mine.has_unseen ? (
-            <SpinningRing>
-              <View style={styles.inner}><Avatar uri={user?.avatar} name={user?.full_name} size={58} /></View>
-            </SpinningRing>
-          ) : (
-            <View style={[styles.ring, { backgroundColor: colors.surfaceTertiary }]}>
-              <View style={styles.inner}><Avatar uri={user?.avatar} name={user?.full_name} size={58} /></View>
-            </View>
-          )}
-          <Pressable style={styles.addBadge} onPress={() => router.push("/story/create")} testID="story-add-badge">
-            <Icon name="add" size={16} color={colors.onBrandPrimary} />
-          </Pressable>
-        </View>
-        <Text style={styles.name} numberOfLines={1}>Your story</Text>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ gap: 10, padding: 12 }}
+    >
+      <Pressable style={card} onPress={() => router.push("/story/create")}>
+        <Image
+          source={{ uri: fileUrl(user?.avatar) }}
+          style={{ width: "100%", height: 144 }}
+          contentFit="cover"
+        />
+        <Text style={{ color: c.brand, fontSize: 28, textAlign: "center" }}>
+          +
+        </Text>
+        <Text
+          style={{ color: c.onSurface, textAlign: "center", fontWeight: "600" }}
+        >
+          Create story
+        </Text>
       </Pressable>
-
-      {others.map((g) => (
-        <Pressable key={g.author.id} style={styles.item} testID={`story-${g.author.username}`} onPress={() => router.push(`/story/${g.author.id}`)}>
-          <View style={styles.ringWrap}>
-            {g.has_unseen ? (
-              <SpinningRing>
-                <View style={styles.inner}><Avatar uri={g.author.avatar} name={g.author.full_name} size={58} /></View>
-              </SpinningRing>
+      {groups.map((g) => {
+        const story = g.stories?.[0],
+          preview =
+            story?.image ||
+            (story?.type === "image" ? story?.media : null) ||
+            g.author.avatar;
+        return (
+          <Pressable
+            key={g.author.id}
+            style={card}
+            onPress={() => router.push(`/story/${g.author.id}`)}
+          >
+            {preview ? (
+              <Image
+                source={{ uri: fileUrl(preview) }}
+                style={{ position: "absolute", width: "100%", height: "100%" }}
+                contentFit="cover"
+              />
             ) : (
-              <View style={[styles.ring, { backgroundColor: colors.border }]}>
-                <View style={styles.inner}><Avatar uri={g.author.avatar} name={g.author.full_name} size={58} /></View>
+              <View
+                style={{
+                  flex: 1,
+                  backgroundColor: story?.bg_color || c.brand,
+                  padding: 10,
+                  justifyContent: "center",
+                }}
+              >
+                <Text style={{ color: "#fff" }} numberOfLines={5}>
+                  {story?.text || "View story"}
+                </Text>
               </View>
             )}
-            {g.is_inner && (
-              <View style={styles.innerStar}>
-                <Icon name="star" size={11} color={colors.onBrandSecondary} />
-              </View>
-            )}
-          </View>
-          <Text style={styles.name} numberOfLines={1}>{g.author.full_name?.split(" ")[0]}</Text>
-        </Pressable>
-      ))}
+            <View
+              style={{
+                position: "absolute",
+                top: 8,
+                left: 8,
+                borderRadius: 24,
+                borderWidth: 3,
+                borderColor: g.has_unseen ? c.brand : c.border,
+              }}
+            >
+              <Avatar
+                uri={g.author.avatar}
+                name={g.author.full_name}
+                size={34}
+              />
+            </View>
+            <View
+              style={{
+                position: "absolute",
+                bottom: 0,
+                left: 0,
+                right: 0,
+                padding: 10,
+                backgroundColor: "rgba(0,0,0,0.45)",
+              }}
+            >
+              <Text
+                style={{ fontSize: 14, fontWeight: "600", color: "#fff" }}
+                numberOfLines={2}
+              >
+                {g.is_mine ? "Your story" : g.author.full_name}
+              </Text>
+            </View>
+          </Pressable>
+        );
+      })}
     </ScrollView>
   );
 }
-
-const useStyles = makeStyles((c) => ({
-  row: { paddingHorizontal: spacing.lg, gap: spacing.md, paddingVertical: spacing.sm },
-  item: { alignItems: "center", width: 72, gap: spacing.xs },
-  ringWrap: { width: 70, height: 70 },
-  ring: { width: 70, height: 70, borderRadius: 35, alignItems: "center", justifyContent: "center" },
-  inner: { width: 62, height: 62, borderRadius: 31, backgroundColor: c.surface, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  addBadge: { position: "absolute", bottom: 0, right: 0, width: 22, height: 22, borderRadius: 11, backgroundColor: c.brandPrimary, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: c.surface },
-  innerStar: { position: "absolute", top: 0, right: 0, width: 20, height: 20, borderRadius: 10, backgroundColor: c.brandSecondary, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: c.surface },
-  name: { color: c.onSurfaceSecondary, fontFamily: fonts.medium, fontSize: 12, maxWidth: 68 },
-}));

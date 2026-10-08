@@ -1,3 +1,4 @@
+import {hasRestrictedToken} from "@/src/api/client";
 import { useEffect } from "react";
 import { View, ActivityIndicator } from "react-native";
 import { useRouter } from "expo-router";
@@ -11,8 +12,7 @@ export default function Index() {
 
   useEffect(() => {
     if (loading) return;
-    if (signedIn) router.replace("/(tabs)");
-    else router.replace("/(auth)/welcome");
+    (async()=>{if(await hasRestrictedToken())router.replace("/account-suspended");else if(signedIn)router.replace("/(tabs)");else router.replace("/(auth)/welcome");})();
   }, [loading, signedIn, router]);
 
   return (

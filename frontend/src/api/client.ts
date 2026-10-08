@@ -1,3 +1,4 @@
+import { router } from "expo-router";
 import { Platform } from "react-native";
 import Constants from "expo-constants";
 import { storage } from "@/src/utils/storage";
@@ -50,6 +51,7 @@ async function request(path: string, options: RequestInit = {}, useAdmin = false
   }
   if (!res.ok) {
     const message = (data && data.detail) || "Something went wrong";
+    if(res.status===403 && typeof message==='string' && message.startsWith('Account suspended') && token && !useAdmin){await setRestrictedToken(token);await setToken(null);router.replace('/account-suspended');}
     throw new Error(typeof message === "string" ? message : JSON.stringify(message));
   }
   return data;
@@ -127,3 +129,9 @@ export function fileUrl(pathOrUrl: string | null | undefined): string | undefine
   if (pathOrUrl.startsWith("http")) return pathOrUrl;
   return `${API}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
 }
+
+export const RESTRICTED_TOKEN_KEY="glint_restricted_token";
+export async function setRestrictedToken(token:string|null){if(token)await storage.secureSet(RESTRICTED_TOKEN_KEY,token);else await storage.secureRemove(RESTRICTED_TOKEN_KEY);}
+export async function restrictedRequest(path:string,body?:any){const token=await storage.secureGet<string>(RESTRICTED_TOKEN_KEY,"");const res=await fetch(`${API}${path}`,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:body?JSON.stringify(body):undefined});const data=await res.json();if(!res.ok)throw new Error(typeof data.detail==='string'?data.detail:'Unable to send appeal');return data;}
+
+export async function hasRestrictedToken(){return !!(await storage.secureGet<string>(RESTRICTED_TOKEN_KEY,""));}
