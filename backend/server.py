@@ -199,27 +199,7 @@ async def send_moderation_email(to_email: Optional[str], subject: str, body: str
 async def active_suspension(user: dict) -> Optional[dict]:
     if not user.get("suspended"):
         return None
-    until = user.get("suspended_until")
-    if until:
-        try:
-            until_dt = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
-            if until_dt.tzinfo is None:
-                until_dt = until_dt.replace(tzinfo=timezone.utc)
-            if until_dt <= datetime.now(timezone.utc):
-                await db.users.update_one(
-                    {"id": user["id"]},
-                    {"$set": {"suspended": False, "suspended_until": None, "suspend_reason": None}},
-                )
-                user["suspended"] = False
-                user["suspended_until"] = None
-                user["suspend_reason"] = None
-                return None
-        except Exception:
-            pass
-    return {
-        "reason": user.get("suspend_reason") or "Violation of Glint rules",
-        "until": until,
-    }
+    return {"reason": user.get("suspend_reason") or "Violation of Glint rules", "until": None}
 
 
 def _infobip_sms_configured() -> bool:
@@ -358,6 +338,14 @@ def make_token(user_id: str, is_admin: bool = False) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
 
+async def issue_session(user_id: str, device: str = 'Glint app') -> str:
+    sid=new_id()
+    await db.sessions.insert_one({'id':sid,'user_id':user_id,'device':device[:100],'created_at':now_iso(),'revoked':False})
+    payload=decode_token(make_token(user_id))
+    payload['sid']=sid
+    return jwt.encode(payload,JWT_SECRET,algorithm='HS256')
+
+
 def decode_token(token: str) -> dict:
     return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
 
@@ -400,17 +388,32 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
         payload = decode_token(token)
     except Exception:
         raise HTTPException(401, "Invalid token")
+    if payload.get('restricted'):
+        raise HTTPException(403, 'Appeal-only session. Please sign in again.')
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
     if not user:
         raise HTTPException(401, "User not found")
     force_logout_at = parse_iso_datetime(user.get("force_logout_at"))
     if force_logout_at:
-        token_iat = payload.get("iat")
-        if not token_iat or int(token_iat) <= int(force_logout_at.timestamp()):
-            raise HTTPException(401, "Session expired. Please sign in again.")
+        if payload.get('sid'):
+            session=await db.sessions.find_one({'id':payload['sid'],'user_id':user['id'],'revoked':False})
+            created=parse_iso_datetime((session or {}).get('created_at'))
+            if not created or created<=force_logout_at:
+                raise HTTPException(401,'Session expired. Please sign in again.')
+        elif not payload.get('restricted'):
+            token_iat=payload.get('iat')
+            if not token_iat or int(token_iat)<=int(force_logout_at.timestamp()):
+                raise HTTPException(401,'Session expired. Please sign in again.')
+    if user.get("deactivated"):
+        raise HTTPException(403, "Account deactivated. Sign in to reactivate.")
     if user.get("deleted_at"):
         reason = user.get("deleted_reason") or "This account has been removed by Glint."
         raise HTTPException(403, f"Account removed. Reason: {reason}")
+    sid = payload.get("sid")
+    if not sid and user.get('legacy_sessions_revoked'):
+        raise HTTPException(401,'Session expired. Please sign in again.')
+    if sid and not await db.sessions.find_one({"id": sid, "user_id": user["id"], "revoked": False}):
+        raise HTTPException(401, "Session expired. Please sign in again.")
     suspension = await active_suspension(user)
     if suspension:
         until_text = f" Until: {suspension['until']}." if suspension.get("until") else ""
@@ -445,11 +448,20 @@ async def get_authenticated_user_allow_suspended(authorization: Optional[str] = 
         raise HTTPException(401, "User not found")
     force_logout_at = parse_iso_datetime(user.get("force_logout_at"))
     if force_logout_at:
-        token_iat = payload.get("iat")
-        if not token_iat or int(token_iat) <= int(force_logout_at.timestamp()):
-            raise HTTPException(401, "Session expired. Please sign in again.")
+        if payload.get('sid'):
+            session=await db.sessions.find_one({'id':payload['sid'],'user_id':user['id'],'revoked':False})
+            created=parse_iso_datetime((session or {}).get('created_at'))
+            if not created or created<=force_logout_at:
+                raise HTTPException(401,'Session expired. Please sign in again.')
+        elif not payload.get('restricted'):
+            token_iat=payload.get('iat')
+            if not token_iat or int(token_iat)<=int(force_logout_at.timestamp()):
+                raise HTTPException(401,'Session expired. Please sign in again.')
     if user.get("deleted_at"):
         raise HTTPException(403, "Account removed")
+    sid=payload.get('sid')
+    if sid and not await db.sessions.find_one({'id':sid,'user_id':user['id'],'revoked':False}):
+        raise HTTPException(401,'Session expired. Please sign in again.')
     return user
 
 
@@ -594,6 +606,12 @@ async def are_friends(a: str, b: str) -> bool:
 async def notify(to_user: str, from_user: str, ntype: str, ref_id: Optional[str], text: str):
     if to_user == from_user:
         return
+    recipient = await db.users.find_one({"id": to_user})
+    if not recipient or recipient.get("suspended") or recipient.get("deleted_at") or recipient.get("deactivated"):
+        return
+    pref = recipient.get("settings", {}).get("notifications", {}).get(ntype, "everyone")
+    if pref == "off" or (pref == "friends" and not await are_friends(to_user, from_user)):
+        return
     await db.notifications.insert_one({
         "id": new_id(), "to_user": to_user, "from_user": from_user,
         "type": ntype, "ref_id": ref_id, "text": text,
@@ -624,7 +642,15 @@ def golden_window():
 
 
 async def can_view_post(post: dict, author: dict, viewer_id: str, friend_ids: set) -> bool:
+    if post.get('archived'):
+        return False
+    if author.get("suspended") or author.get("deleted_at") or author.get("deactivated"):
+        return False
+    if viewer_id in author.get("blocked", []):
+        return False
     aud = post.get("audience", "public")
+    if aud == "only_me" and author["id"] != viewer_id:
+        return False
     if author["id"] == viewer_id:
         return True
     profile_privacy = author.get("privacy", "public")
@@ -639,7 +665,7 @@ async def can_view_post(post: dict, author: dict, viewer_id: str, friend_ids: se
 
 async def enrich_author(user_id: str) -> dict:
     u = await db.users.find_one({"id": user_id}, {"_id": 0})
-    return public_user(u)
+    return None if not u or u.get("suspended") or u.get("deleted_at") or u.get("deactivated") else public_user(u)
 
 
 # ----------------------------- models -----------------------------
@@ -659,6 +685,7 @@ class VerifyOtp(BaseModel):
 class LoginBody(BaseModel):
     contact: str
     password: str
+    second_factor: Optional[str] = None
 
 
 class ForgotBody(BaseModel):
@@ -686,7 +713,7 @@ class PostCreate(BaseModel):
     text: Optional[str] = ""
     image: Optional[str] = None
     poll_options: Optional[List[str]] = None
-    audience: str = "public"  # public | friends | inner
+    audience: Optional[str] = None  # account default when omitted
 
 
 class StoryCreate(BaseModel):
@@ -696,7 +723,7 @@ class StoryCreate(BaseModel):
     bg_color: Optional[str] = None
     media: Optional[str] = None
     duration: Optional[float] = None
-    audience: str = "friends"  # friends | inner
+    audience: Optional[str] = None  # account default when omitted
 
 
 class CaptionRequest(BaseModel):
@@ -941,6 +968,8 @@ async def verify_otp(body: VerifyOtp):
     u = await db.users.find_one({"id": body.user_id})
     if not u:
         raise HTTPException(404, "User not found")
+    if u.get('verified') or u.get('otp_purpose')!='signup' or u.get('deleted_at') or u.get('suspended'):
+        raise HTTPException(403,'Use the sign-in screen for this account')
     if u.get("phone") and not DEV_OTP_ENABLED:
         if _infobip_sms_configured():
             expires_raw = u.get("otp_expires_at")
@@ -972,7 +1001,7 @@ async def verify_otp(body: VerifyOtp):
     if u.get("phone"):
         verify_update["phone_verified"] = True
     await db.users.update_one({"id": body.user_id}, {"$set": verify_update})
-    token = make_token(body.user_id)
+    token = await issue_session(body.user_id)
     fresh = await db.users.find_one({"id": body.user_id}, {"_id": 0})
     return {"token": token, "user": public_user(fresh)}
 
@@ -1026,15 +1055,30 @@ async def login(body: LoginBody):
         raise HTTPException(403, f"Account removed. Reason: {reason}")
     if not u.get("verified"):
         raise HTTPException(403, "Please verify your account first")
+    if u.get('two_factor_secret'):
+        locked=parse_iso_datetime(u.get('two_factor_locked_until'))
+        if locked and locked>now_dt(): raise HTTPException(429,'Too many attempts. Try again in 10 minutes.')
+        if not await check_second_factor(u,body.second_factor or ''):
+            failures=int(u.get('two_factor_failures',0))+1
+            await db.users.update_one({'id':u['id']},{'$set':{'two_factor_failures':failures,'two_factor_locked_until':(now_dt()+timedelta(minutes=10)).isoformat() if failures>=5 else None}})
+            raise HTTPException(403,'Enter your authenticator or recovery code')
+        await db.users.update_one({'id':u['id']},{'$set':{'two_factor_failures':0,'two_factor_locked_until':None}})
+    if u.get("deactivated"):
+        await db.users.update_one({"id": u["id"]}, {"$set": {"deactivated": False}})
+        u["deactivated"] = False
     suspension = await active_suspension(u)
     if suspension:
-        until_text = f" Until: {suspension['until']}." if suspension.get("until") else ""
-        raise HTTPException(403, f"Account suspended. Reason: {suspension['reason']}.{until_text}")
+        payload=decode_token(make_token(u['id']))
+        payload['restricted']=True
+        payload['exp']=int((now_dt()+timedelta(hours=1)).timestamp())
+        return {"restricted": True, "appeal_token": jwt.encode(payload,JWT_SECRET,algorithm='HS256'), "reason": suspension["reason"]}
     await db.users.update_one({"id": u["id"]}, {"$set": {"last_seen": now_iso()}})
     await db.login_events.insert_one({
         "id": new_id(), "user_id": u["id"], "type": "password_login", "created_at": now_iso()
     })
-    token = make_token(u["id"])
+    token = await issue_session(u['id'])
+    if u.get("settings", {}).get("login_alerts", True):
+        await send_moderation_email(u.get("email"), "New Glint sign-in", "A new sign-in was completed on your Glint account. Review your sessions in Login & Security if this was not you.")
     return {"token": token, "user": public_user(u)}
 
 
@@ -1048,7 +1092,7 @@ async def forgot(body: ForgotBody):
     if not u:
         raise HTTPException(404, "No account found with these details")
     code = f"{random.randint(0, 999999):06d}"
-    await db.users.update_one({"id": u["id"]}, {"$set": {"otp": code, "otp_purpose": "reset"}})
+    await db.users.update_one({"id": u["id"]}, {"$set": {"otp": code, "otp_purpose": "reset", "otp_expires_at": (now_dt()+timedelta(minutes=10)).isoformat(), "otp_attempts":0}})
     logger.info(f"[OTP] reset code generated for {u.get('username')}")
     email = u.get("email")
     if email:
@@ -1067,12 +1111,21 @@ async def forgot(body: ForgotBody):
 @api.post("/auth/reset")
 async def reset(body: ResetBody):
     u = await db.users.find_one({"id": body.user_id})
-    if not u or u.get("otp") != body.code:
-        raise HTTPException(400, "Invalid reset code")
-    if len(body.password) < 6:
-        raise HTTPException(400, "Password must be at least 6 characters")
-    await db.users.update_one({"id": body.user_id}, {"$set": {"password": hash_pw(body.password), "otp": None}})
-    token = make_token(body.user_id)
+    if not u or u.get('deleted_at') or u.get('otp_purpose')!='reset' or not parse_iso_datetime(u.get('otp_expires_at')) or parse_iso_datetime(u['otp_expires_at'])<=now_dt() or int(u.get('otp_attempts',0))>=5:
+        raise HTTPException(400,'Reset code expired. Request a new code.')
+    if not hmac.compare_digest(str(u.get('otp') or ''),body.code):
+        await db.users.update_one({'id':u['id']},{'$inc':{'otp_attempts':1}})
+        raise HTTPException(400,'Invalid reset code')
+    if not 8<=len(body.password)<=128:
+        raise HTTPException(400, "Password must be 8–128 characters")
+    result=await db.users.update_one({'id':u['id'],'otp':body.code,'otp_purpose':'reset'}, {'$set':{'password':hash_pw(body.password),'otp':None,'otp_purpose':None}})
+    if not result.matched_count: raise HTTPException(409,'Code has already been used')
+    await db.sessions.update_many({'user_id':u['id']},{'$set':{'revoked':True}})
+    await db.users.update_one({'id':u['id']},{'$set':{'legacy_sessions_revoked':True}})
+    if u.get('two_factor_secret') or u.get('suspended'):
+        await db.users.update_one({'id':u['id']},{'$set':{'force_logout_at':now_iso()}})
+        return {'requires_login':True}
+    token = await issue_session(body.user_id)
     fresh = await db.users.find_one({"id": body.user_id}, {"_id": 0})
     return {"token": token, "user": public_user(fresh)}
 
@@ -1142,13 +1195,14 @@ async def update_me(body: ProfileUpdate, me=Depends(get_current_user)):
 
 @api.get("/users/search")
 async def search_users(q: str = Query(""), me=Depends(get_current_user)):
-    q = q.strip().lower()
+    q = re.escape(q.strip().lower())
     if not q:
         return []
     blocked = set(me.get("blocked", []))
     cur = db.users.find({
         "deleted_at": None,
         "verified": True,
+        "suspended": {"$ne": True}, "deactivated": {"$ne": True},
         "id": {"$ne": me["id"]},
         "$or": [
             {"username": {"$regex": q, "$options": "i"}},
@@ -1157,7 +1211,7 @@ async def search_users(q: str = Query(""), me=Depends(get_current_user)):
     }, {"_id": 0}).limit(30)
     out = []
     async for u in cur:
-        if u["id"] in blocked:
+        if u["id"] in blocked or me["id"] in u.get("blocked", []):
             continue
         out.append(public_user(u))
     return out
@@ -1166,8 +1220,10 @@ async def search_users(q: str = Query(""), me=Depends(get_current_user)):
 @api.get("/users/{username}")
 async def get_user(username: str, me=Depends(get_current_user)):
     u = await db.users.find_one({"username": username.lower(), "deleted_at": None}, {"_id": 0})
-    if not u:
-        raise HTTPException(404, "User not found")
+    if not u or u.get("suspended") or u.get("deactivated"):
+        raise HTTPException(404, "Account not found")
+    if me['id'] in u.get('blocked',[]) or u['id'] in me.get('blocked',[]):
+        raise HTTPException(404,'Account not found')
     data = public_user(u)
     friend = await are_friends(me["id"], u["id"])
     # friend request status
@@ -1183,6 +1239,8 @@ async def get_user(username: str, me=Depends(get_current_user)):
         fr_status = "friends"
     elif req:
         fr_status = "outgoing" if req["from"] == me["id"] else "incoming"
+    data["details"] = visible_details(u, me["id"], friend)
+    data["avatar_character"] = u.get("avatar_character")
     data["friend_status"] = fr_status
     data["is_me"] = u["id"] == me["id"]
     data["is_blocked"] = u["id"] in set(me.get("blocked", []))
@@ -1250,13 +1308,14 @@ async def unfollow_user(user_id: str, me=Depends(get_current_user)):
 @api.get("/users/{user_id}/followers")
 async def user_followers(user_id: str, me=Depends(get_current_user)):
     target = await db.users.find_one({"id": user_id, "deleted_at": None})
-    if not target:
+    if not target or target.get("suspended") or target.get("deactivated"):
         raise HTTPException(404, "User not found")
+    await require_audience(target, target.get("settings", {}).get("followers_visibility", "public"), me["id"])
     out = []
     cur = db.follows.find({"following_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(500)
     async for row in cur:
         u = await db.users.find_one({"id": row.get("follower_id"), "deleted_at": None, "verified": True}, {"_id": 0})
-        if not u:
+        if not u or u.get("suspended") or u.get("deactivated"):
             continue
         item = public_user(u)
         item["is_following"] = await db.follows.find_one({
@@ -1269,13 +1328,14 @@ async def user_followers(user_id: str, me=Depends(get_current_user)):
 @api.get("/users/{user_id}/following")
 async def user_following(user_id: str, me=Depends(get_current_user)):
     target = await db.users.find_one({"id": user_id, "deleted_at": None})
-    if not target:
+    if not target or target.get("suspended") or target.get("deactivated"):
         raise HTTPException(404, "User not found")
+    await require_audience(target, target.get("settings", {}).get("following_visibility", "public"), me["id"])
     out = []
     cur = db.follows.find({"follower_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(500)
     async for row in cur:
         u = await db.users.find_one({"id": row.get("following_id"), "deleted_at": None, "verified": True}, {"_id": 0})
-        if not u:
+        if not u or u.get("suspended") or u.get("deactivated"):
             continue
         item = public_user(u)
         item["is_following"] = await db.follows.find_one({
@@ -1400,12 +1460,12 @@ async def friend_requests(me=Depends(get_current_user)):
     incoming = []
     async for r in db.friend_requests.find({"to": me["id"], "status": "pending"}):
         u = await db.users.find_one({"id": r["from"], "deleted_at": None}, {"_id": 0})
-        if u:
+        if u and not u.get('suspended') and not u.get('deactivated'):
             incoming.append(public_user(u))
     outgoing = []
     async for r in db.friend_requests.find({"from": me["id"], "status": "pending"}):
         u = await db.users.find_one({"id": r["to"], "deleted_at": None}, {"_id": 0})
-        if u:
+        if u and not u.get('suspended') and not u.get('deactivated'):
             outgoing.append(public_user(u))
     return {"incoming": incoming, "outgoing": outgoing}
 
@@ -1422,7 +1482,7 @@ async def suggestions(me=Depends(get_current_user)):
         pending.add(r["to"])
     exclude = friend_ids | pending | set(me.get("blocked", [])) | {me["id"]}
     out = []
-    cur = db.users.find({"deleted_at": None, "verified": True, "id": {"$nin": list(exclude)}}, {"_id": 0}).limit(20)
+    cur = db.users.find({"deleted_at": None, "verified": True, "suspended":{"$ne":True}, "deactivated":{"$ne":True}, "id": {"$nin": list(exclude)}}, {"_id": 0}).limit(20)
     async for u in cur:
         out.append(public_user(u))
     return out
@@ -1490,6 +1550,8 @@ async def feed_posts_for_author(author_id: str, me_id: str):
 
 @api.post("/posts")
 async def create_post(body: PostCreate, me=Depends(get_current_user)):
+    if body.audience is not None and body.audience not in {'public','friends','inner','only_me'}:
+        raise HTTPException(400,'Invalid audience')
     if not await app_feature_enabled("posts_enabled", True):
         raise HTTPException(503, "Posting is temporarily unavailable.")
     await ensure_not_restricted(me, "posting_restricted_until", "Posting")
@@ -1500,7 +1562,7 @@ async def create_post(body: PostCreate, me=Depends(get_current_user)):
         "type": body.type,
         "text": (body.text or "").strip(),
         "image": body.image,
-        "audience": body.audience if body.audience in ("public", "friends", "inner") else "public",
+        "audience": body.audience if body.audience in ("public", "friends", "inner", "only_me") else me.get("settings", {}).get("posts_audience", "public"),
         "golden": active,
         "sparks": 0,
         "sparkers": [],
@@ -1526,7 +1588,7 @@ async def get_feed(me=Depends(get_current_user)):
             if x != me["id"]:
                 friend_ids.append(x)
     hidden = [h["post_id"] async for h in db.hidden.find({"user_id": me["id"]})]
-    blocked = me.get("blocked", [])
+    blocked = list(set(me.get("blocked", []) + me.get('settings',{}).get('muted_users',[])))
     # public posts + friends posts, excluding hidden/blocked
     query = {
         "deleted_at": None,
@@ -1579,6 +1641,19 @@ async def golden_status(me=Depends(get_current_user)):
     }
 
 
+async def require_post_access(post,me):
+    if not post or post.get('deleted_at'):
+        raise HTTPException(404,'Post not found')
+    author=await db.users.find_one({'id':post['author_id'],'deleted_at':None})
+    if not author or author['id'] in me.get('blocked',[]):
+        raise HTTPException(404,'Post not found')
+    friends={me['id']}
+    if await are_friends(me['id'],author['id']): friends.add(author['id'])
+    if not await can_view_post(post,author,me['id'],friends):
+        raise HTTPException(403,'This post is private or unavailable')
+    return author
+
+
 @api.get("/posts/{post_id}")
 async def get_post(post_id: str, me=Depends(get_current_user)):
     p = await db.posts.find_one({"id": post_id, "deleted_at": None})
@@ -1603,6 +1678,7 @@ async def react_post(post_id: str, body: ReactionBody, me=Depends(get_current_us
     p = await db.posts.find_one({"id": post_id, "deleted_at": None})
     if not p:
         raise HTTPException(404, "Post not found")
+    await require_post_access(p,me)
     key = f"reactions.{me['id']}"
     if body.reaction:
         await db.posts.update_one({"id": post_id}, {"$set": {key: body.reaction}})
@@ -1619,6 +1695,7 @@ async def vote_poll(post_id: str, option: int = Query(...), me=Depends(get_curre
     p = await db.posts.find_one({"id": post_id, "deleted_at": None, "type": "poll"})
     if not p:
         raise HTTPException(404, "Poll not found")
+    await require_post_access(p,me)
     if option < 0 or option >= len(p.get("poll_options", [])):
         raise HTTPException(400, "Invalid option")
     await db.posts.update_one({"id": post_id}, {"$set": {f"votes.{me['id']}": option}})
@@ -1637,6 +1714,7 @@ async def delete_post(post_id: str, me=Depends(get_current_user)):
 
 @api.post("/posts/{post_id}/save")
 async def save_post(post_id: str, me=Depends(get_current_user)):
+    await require_post_access(await db.posts.find_one({'id':post_id,'deleted_at':None}),me)
     existing = await db.saved.find_one({"user_id": me["id"], "post_id": post_id})
     if existing:
         await db.saved.delete_one({"user_id": me["id"], "post_id": post_id})
@@ -1652,6 +1730,8 @@ async def saved_list(me=Depends(get_current_user)):
     for pid in ids:
         p = await db.posts.find_one({"id": pid, "deleted_at": None})
         if p:
+            try: await require_post_access(p,me)
+            except HTTPException: continue
             out.append(await serialize_post(p, me["id"]))
     return out
 
@@ -1669,12 +1749,15 @@ async def hide_post(post_id: str, me=Depends(get_current_user)):
 # comments
 @api.get("/posts/{post_id}/comments")
 async def get_comments(post_id: str, me=Depends(get_current_user)):
+    await require_post_access(await db.posts.find_one({'id':post_id,'deleted_at':None}),me)
     cur = db.comments.find({"post_id": post_id, "deleted_at": None}).sort("created_at", 1)
     out = []
     async for c in cur:
+        author=await enrich_author(c['author_id'])
+        if not author: continue
         out.append({
             "id": c["id"],
-            "author": await enrich_author(c["author_id"]),
+            "author": author,
             "text": c["text"],
             "created_at": c["created_at"],
             "is_mine": c["author_id"] == me["id"],
@@ -1690,6 +1773,9 @@ async def add_comment(post_id: str, body: CommentCreate, me=Depends(get_current_
     p = await db.posts.find_one({"id": post_id, "deleted_at": None})
     if not p:
         raise HTTPException(404, "Post not found")
+    owner = await require_post_access(p,me)
+    await require_audience(owner, owner.get("settings", {}).get("comments", "public"), me["id"])
+    await require_audience(owner, p.get("audience", "public"), me["id"])
     doc = {
         "id": new_id(), "post_id": post_id, "author_id": me["id"],
         "text": body.text.strip(), "deleted_at": None, "created_at": now_iso(),
@@ -1790,6 +1876,7 @@ async def spark_post(post_id: str, me=Depends(get_current_user)):
     p = await db.posts.find_one({"id": post_id, "deleted_at": None})
     if not p:
         raise HTTPException(404, "Post not found")
+    await require_post_access(p,me)
     if p["author_id"] == me["id"]:
         raise HTTPException(400, "You can't spark your own post")
     if me["id"] in p.get("sparkers", []):
@@ -1861,6 +1948,8 @@ async def ai_captions(body: CaptionRequest, me=Depends(get_current_user)):
 # ----------------------------- stories -----------------------------
 @api.post("/stories")
 async def create_story(body: StoryCreate, me=Depends(get_current_user)):
+    if body.audience is not None and body.audience not in {'public','friends','inner','only_me'}:
+        raise HTTPException(400,'Invalid audience')
     if not await app_feature_enabled("stories_enabled", True):
         raise HTTPException(503, "Stories are temporarily unavailable.")
     await ensure_not_restricted(me, "posting_restricted_until", "Story posting")
@@ -1875,7 +1964,7 @@ async def create_story(body: StoryCreate, me=Depends(get_current_user)):
         "bg_color": body.bg_color,
         "media": body.media,
         "duration": body.duration,
-        "audience": body.audience if body.audience in ("friends", "inner") else "friends",
+        "audience": body.audience if body.audience in ("public", "friends", "inner", "only_me") else me.get("settings", {}).get("stories_audience", "friends"),
         "viewers": [],
         "deleted_at": None,
         "created_at": now_iso(),
@@ -1893,11 +1982,12 @@ async def stories_feed(me=Depends(get_current_user)):
             if x != me["id"]:
                 friend_ids.append(x)
     now = now_iso()
-    blocked = me.get("blocked", [])
+    blocked = list(set(me.get("blocked", []) + me.get('settings',{}).get('muted_users',[])))
     cur = db.stories.find({
         "deleted_at": None,
         "expires_at": {"$gt": now},
-        "author_id": {"$in": friend_ids, "$nin": blocked},
+        "author_id": {"$nin": blocked},
+        "$or": [{"author_id": {"$in": friend_ids}}, {"audience": "public"}],
     }).sort("created_at", 1)
     grouped = {}
     authors_cache = {}
@@ -1906,7 +1996,11 @@ async def stories_feed(me=Depends(get_current_user)):
         if aid not in authors_cache:
             authors_cache[aid] = await db.users.find_one({"id": aid}, {"_id": 0})
         au = authors_cache[aid]
-        if not au:
+        if not au or au.get("suspended") or au.get("deleted_at") or au.get("deactivated") or me["id"] in au.get("blocked", []) or me["id"] in au.get("settings", {}).get("hidden_story_users", []):
+            continue
+        if s.get("audience") == "only_me" and aid != me["id"]:
+            continue
+        if s.get('audience','friends')=='friends' and aid not in friend_ids:
             continue
         # inner-audience stories only visible to the author's inner circle
         if s.get("audience") == "inner" and aid != me["id"] and me["id"] not in au.get("inner_circle", []):
@@ -1941,6 +2035,12 @@ async def stories_feed(me=Depends(get_current_user)):
 
 @api.post("/stories/{story_id}/view")
 async def view_story(story_id: str, me=Depends(get_current_user)):
+    story=await db.stories.find_one({'id':story_id,'deleted_at':None,'expires_at':{'$gt':now_iso()}})
+    if not story: raise HTTPException(404,'Story not found')
+    author=await db.users.find_one({'id':story['author_id']})
+    await require_audience(author,story.get('audience','friends'),me['id'])
+    if author['id'] in me.get('blocked',[]) or me['id'] in author.get('settings',{}).get('hidden_story_users',[]):
+        raise HTTPException(404,'Story not found')
     await db.stories.update_one({"id": story_id}, {"$addToSet": {"viewers": me["id"]}})
     return {"ok": True}
 
@@ -2027,10 +2127,10 @@ async def conversations(me=Depends(get_current_user)):
             continue
         other = [x for x in c["participants"] if x != me["id"]][0]
         u = await db.users.find_one({"id": other, "deleted_at": None}, {"_id": 0})
-        if not u:
+        if not u or u.get("suspended") or u.get("deactivated") or u["id"] in me.get("blocked", []) or me["id"] in u.get("blocked", []):
             continue
         unread = await db.messages.count_documents({
-            "conversation_id": c["id"], "to_user": me["id"], "status": {"$ne": "read"}})
+            "conversation_id": c["id"], "to_user": me["id"], "seen_by_recipient": {"$ne": True}})
         last_seen = u.get("last_seen")
         online = False
         if last_seen:
@@ -2047,8 +2147,8 @@ async def conversations(me=Depends(get_current_user)):
             "updated_at": c.get("updated_at"),
             "unread": unread,
             "muted": me["id"] in c.get("muted_by", []),
-            "online": online,
-            "last_seen": last_seen,
+            "online": online if u.get("settings", {}).get("active_status", True) else False,
+            "last_seen": last_seen if u.get("settings", {}).get("active_status", True) else None,
         })
     return out
 
@@ -2118,12 +2218,14 @@ async def get_group(group_id: str, me=Depends(get_current_user)):
 async def get_conversation(user_id: str, me=Depends(get_current_user)):
     cid = conv_id_for(me["id"], user_id)
     other = await db.users.find_one({"id": user_id, "deleted_at": None}, {"_id": 0})
-    if not other:
-        raise HTTPException(404, "User not found")
+    if not other or other.get("suspended") or other.get("deactivated"):
+        raise HTTPException(404, "Account not found")
+    if other['id'] in me.get('blocked',[]) or me['id'] in other.get('blocked',[]):
+        raise HTTPException(403,'Conversation unavailable')
     # mark delivered/read
     await db.messages.update_many(
         {"conversation_id": cid, "to_user": me["id"], "status": {"$ne": "read"}},
-        {"$set": {"status": "read"}})
+        {"$set": {"status": "read" if me.get("settings", {}).get("read_receipts",True) else "delivered", "seen_by_recipient":True}})
     cur = db.messages.find({"conversation_id": cid}).sort("created_at", 1).limit(200)
     msgs = []
     async for m in cur:
@@ -2146,8 +2248,8 @@ async def get_conversation(user_id: str, me=Depends(get_current_user)):
         "id": cid,
         "user": public_user(other),
         "messages": msgs,
-        "online": online,
-        "last_seen": last_seen,
+        "online": online if other.get("settings", {}).get("active_status", True) else False,
+        "last_seen": last_seen if other.get("settings", {}).get("active_status", True) else None,
         "muted": conv and me["id"] in conv.get("muted_by", []),
         "is_friend": await are_friends(me["id"], user_id),
     }
@@ -2158,6 +2260,8 @@ async def send_message(body: MessageCreate, me=Depends(get_current_user)):
     if not await app_feature_enabled("chat_enabled", True):
         raise HTTPException(503, "Messaging is temporarily unavailable.")
     await ensure_not_restricted(me, "messaging_restricted_until", "Messaging")
+    if body.type not in {'text','photo','voice'} or (body.type=='text' and (not body.text or not body.text.strip() or len(body.text)>4000)) or (body.type!='text' and not body.media):
+        raise HTTPException(400,'Enter a message or attach media')
     preview_of = lambda: body.text if body.type == "text" else ("📷 Photo" if body.type == "photo" else "🎤 Voice note")
 
     # group message
@@ -2191,9 +2295,15 @@ async def send_message(body: MessageCreate, me=Depends(get_current_user)):
     to_user = body.to_user
     if not to_user and body.conversation_id:
         parts = body.conversation_id.split("_")
-        to_user = [x for x in parts if x != me["id"]][0]
+        others=[x for x in parts if x != me['id']]
+        if me['id'] not in parts or len(others)!=1: raise HTTPException(400,'Invalid conversation')
+        to_user = others[0]
     if not to_user:
         raise HTTPException(400, "Recipient required")
+    other = await db.users.find_one({"id": to_user, "deleted_at": None})
+    if not other or other.get("suspended") or other.get("deactivated"):
+        raise HTTPException(404, "Account not found")
+    await require_message_access(me, other)
     cid = conv_id_for(me["id"], to_user)
     msg = {
         "id": new_id(), "conversation_id": cid, "from_user": me["id"], "to_user": to_user,
@@ -3370,13 +3480,11 @@ async def suspend_user(user_id: str, body: AdminSuspendBody = AdminSuspendBody()
     if not u:
         raise HTTPException(404, "User not found")
     reason = (body.reason or "Violation of Glint rules").strip()
-    days = body.duration_days
+    days = None
     until = None
-    if days is not None and days > 0:
-        until = (datetime.now(timezone.utc) + timedelta(days=min(days, 3650))).isoformat()
     await db.users.update_one({"id": user_id}, {"$set": {
         "suspended": True,
-        "suspended_until": until,
+        "suspended_until": None,
         "suspend_reason": reason,
     }})
     duration_text = f" until {until}" if until else " indefinitely"
@@ -3531,7 +3639,7 @@ async def admin_edit_user(user_id: str, body: AdminUserEditBody, _=Depends(requi
     if update:
         await db.users.update_one({"id": user_id}, {"$set": update})
         await admin_audit("edit_user_profile", "user", user_id, "Profile edited by admin", user_id, {"fields": sorted(update.keys())})
-        await admin_notify(user_id, "Your Glint profile information was updated by an administrator.")
+        await admin_notify(user_id, "Your Glint profile information was updated by the Glint Team.")
     fresh = await db.users.find_one({"id": user_id}, {"_id": 0})
     return admin_safe_user(fresh)
 
@@ -3905,6 +4013,9 @@ def _share_landing_html(title: str, description: str, deep_link: str) -> str:
 
 @app.get("/share/profile/{username}", response_class=HTMLResponse)
 async def share_profile_page(username: str):
+    account=await db.users.find_one({'username':username.lower(),'deleted_at':None})
+    if not account or account.get('suspended') or account.get('deactivated'):
+        return HTMLResponse('<!doctype html><html><body><h1>Account not found</h1><p>This profile is unavailable.</p></body></html>',status_code=404)
     encoded = urllib.parse.quote(username, safe="")
     return HTMLResponse(_share_landing_html(
         "Open this Glint profile",
@@ -4250,6 +4361,502 @@ async def request_data_deletion(
 
 from group_routes import install_group_management_routes
 install_group_management_routes(api, db, get_current_user, now_iso)
+# Settings are enforced by server routes, rather than display-only switches.
+DETAIL_KEYS = {
+    "current_city",
+    "hometown",
+    "birthday",
+    "gender",
+    "relationship",
+    "family",
+    "languages",
+    "work",
+    "school",
+    "university",
+    "hobbies",
+    "music",
+    "tv_shows",
+    "films",
+    "games",
+    "sports",
+    "places",
+}
+AUDIENCES = {"public", "friends", "only_me"}
+SETTINGS_DEFAULTS = {
+    "followers_visibility": "public",
+    "following_visibility": "public",
+    "posts_audience": "public",
+    "stories_audience": "friends",
+    "comments": "public",
+    "messages": "public",
+    "tags": "public",
+    "active_status": True,
+    "read_receipts": True,
+    "login_alerts": True,
+    "data_saver": False,
+    "autoplay": False,
+    "font_scale": 1.0,
+    "language": "en",
+    "notifications": {},
+    "hidden_story_users": [],
+    "muted_users": [],
+}
+
+
+async def require_audience(owner, audience, viewer):
+    if (
+        not owner
+        or owner.get("deleted_at")
+        or owner.get("suspended")
+        or owner.get("deactivated")
+    ):
+        raise HTTPException(404, "Account not found")
+    if owner["id"] == viewer:
+        return
+    if viewer in owner.get("blocked", []):
+        raise HTTPException(404, "Account not found")
+    if audience == "only_me" or (
+        audience == "friends" and not await are_friends(owner["id"], viewer)
+    ):
+        raise HTTPException(403, "This content is private")
+    if audience == "inner" and viewer not in owner.get("inner_circle", []):
+        raise HTTPException(403, "This content is private")
+
+
+async def require_message_access(sender, recipient):
+    if sender["id"] == recipient["id"]:
+        raise HTTPException(400, "Choose another user")
+    if recipient["id"] in sender.get("blocked", []):
+        raise HTTPException(403, "Unblock this user to send a message")
+    await require_audience(
+        recipient, recipient.get("settings", {}).get("messages", "public"), sender["id"]
+    )
+
+
+def visible_details(user, viewer, friend=False):
+    return {
+        k: v
+        for k, v in user.get("profile_details", {}).items()
+        if isinstance(v, dict)
+        and (
+            viewer == user["id"]
+            or v.get("visibility", "only_me") == "public"
+            or (friend and v.get("visibility") == "friends")
+        )
+    }
+
+
+class SettingsBody(BaseModel):
+    values: dict
+
+
+@api.get("/account/settings")
+async def account_settings(me=Depends(get_current_user)):
+    return {
+        **SETTINGS_DEFAULTS,
+        **me.get("settings", {}),
+        "two_factor_enabled": bool(me.get("two_factor_secret")),
+    }
+
+
+@api.put("/account/settings")
+async def save_settings(body: SettingsBody, me=Depends(get_current_user)):
+    values = body.values
+    for key, value in values.items():
+        if key not in SETTINGS_DEFAULTS:
+            raise HTTPException(400, "Unknown setting")
+        if key in {
+            "followers_visibility",
+            "following_visibility",
+            "posts_audience",
+            "stories_audience",
+            "comments",
+            "messages",
+            "tags",
+        } and (not isinstance(value, str) or value not in AUDIENCES):
+            raise HTTPException(400, "Invalid audience")
+        if isinstance(SETTINGS_DEFAULTS[key], bool) and not isinstance(value, bool):
+            raise HTTPException(400, "Invalid switch")
+        if key == "notifications" and (
+            not isinstance(value, dict)
+            or any(
+                k
+                not in {
+                    "reaction",
+                    "comment",
+                    "follow",
+                    "friend_request",
+                    "friend_accept",
+                    "message",
+                    "spark",
+                    "profile",
+                }
+                or v not in {"everyone", "friends", "off"}
+                for k, v in value.items()
+            )
+        ):
+            raise HTTPException(400, "Invalid notification preferences")
+        if key in {"hidden_story_users", "muted_users"} and (
+            not isinstance(value, list)
+            or len(value) > 500
+            or any(not isinstance(v, str) for v in value)
+        ):
+            raise HTTPException(400, "Invalid user list")
+        if key == "language" and value not in {"en", "ur", "ar"}:
+            raise HTTPException(400, "Invalid language")
+        if key == "font_scale" and value not in [1.0, 1.15, 1.3]:
+            raise HTTPException(400, "Invalid text size")
+    await db.users.update_one(
+        {"id": me["id"]}, {"$set": {"settings." + k: v for k, v in values.items()}}
+    )
+    return {"ok": True}
+
+
+class DetailsBody(BaseModel):
+    details: dict
+    avatar_character: Optional[str] = None
+
+
+@api.get("/account/details")
+async def own_details(me=Depends(get_current_user)):
+    return {
+        "details": me.get("profile_details", {}),
+        "avatar_character": me.get("avatar_character"),
+    }
+
+
+@api.put("/account/details")
+async def save_details(body: DetailsBody, me=Depends(get_current_user)):
+    if any(k not in DETAIL_KEYS for k in body.details):
+        raise HTTPException(400, "Unknown profile detail")
+    for v in body.details.values():
+        if (
+            not isinstance(v, dict)
+            or set(v) - {"value", "visibility"}
+            or v.get("visibility") not in AUDIENCES
+            or not isinstance(v.get("value"), str)
+            or len(v["value"]) > 500
+        ):
+            raise HTTPException(400, "Invalid profile detail")
+    if body.avatar_character is not None and body.avatar_character not in [
+        "🙂",
+        "😎",
+        "👩",
+        "👨",
+        "🧕",
+        "🧑",
+        "🐱",
+        "🦊",
+        "🐼",
+        "🦁",
+        "🤖",
+        "🌸",
+    ]:
+        raise HTTPException(400, "Choose an available avatar")
+    birthday = body.details.get("birthday", {}).get("value")
+    if birthday:
+        try:
+            birthday_date = datetime.strptime(birthday, "%Y-%m-%d").date()
+            if birthday_date > now_dt().date():
+                raise ValueError()
+        except ValueError:
+            raise HTTPException(400, "Use a valid birthday in YYYY-MM-DD format")
+    await db.users.update_one(
+        {"id": me["id"]},
+        {
+            "$set": {
+                "profile_details": body.details,
+                "avatar_character": body.avatar_character,
+            }
+        },
+    )
+    return {"ok": True}
+
+
+class UsernameBody(BaseModel):
+    username: str
+
+
+@api.put("/account/username")
+async def change_username(body: UsernameBody, me=Depends(get_current_user)):
+    name = body.username.strip().lower()
+    if not re.fullmatch(r"[a-z0-9_]{3,30}", name):
+        raise HTTPException(400, "Use 3–30 letters, numbers or underscores")
+    if await db.users.find_one({"username": name, "id": {"$ne": me["id"]}}):
+        raise HTTPException(409, "This username is taken")
+    try:
+        await db.users.create_index("username", unique=True)
+        await db.users.update_one({"id": me["id"]}, {"$set": {"username": name}})
+    except Exception:
+        raise HTTPException(409, "This username could not be reserved")
+    return {"ok": True}
+
+
+class SecurityBody(BaseModel):
+    password: str
+    new_password: Optional[str] = None
+    code: Optional[str] = None
+
+
+@api.post("/account/password")
+async def change_password(body: SecurityBody, me=Depends(get_current_user)):
+    if not verify_pw(body.password, me["password"]):
+        raise HTTPException(403, "Current password is incorrect")
+    if not body.new_password or not 8 <= len(body.new_password) <= 128:
+        raise HTTPException(400, "Use a password of 8–128 characters")
+    if me.get("two_factor_secret") and not await check_second_factor(
+        me, body.code or ""
+    ):
+        raise HTTPException(403, "Authenticator or recovery code required")
+    await db.users.update_one(
+        {"id": me["id"]}, {"$set": {"password": hash_pw(body.new_password)}}
+    )
+    await db.sessions.update_many({"user_id": me["id"]}, {"$set": {"revoked": True}})
+    await db.users.update_one(
+        {"id": me["id"]}, {"$set": {"force_logout_at": now_iso()}}
+    )
+    return {"ok": True, "message": "Password changed. Sign in again."}
+
+
+def totp_counter(secret, code):
+    import struct, time
+
+    if not re.fullmatch(r"\d{6}", code):
+        return None
+    key = base64.b32decode(secret)
+    for delta in [-1, 0, 1]:
+        counter = int(time.time() // 30) + delta
+        digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+        offset = digest[-1] & 15
+        value = (
+            struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+        ) % 1000000
+        if hmac.compare_digest(f"{value:06d}", code):
+            return counter
+    return None
+
+
+async def check_second_factor(user, code):
+    counter = totp_counter(user["two_factor_secret"], code)
+    if counter is not None:
+        result = await db.users.update_one(
+            {
+                "id": user["id"],
+                "$or": [
+                    {"two_factor_counter": {"$lt": counter}},
+                    {"two_factor_counter": {"$exists": False}},
+                ],
+            },
+            {"$set": {"two_factor_counter": counter}},
+        )
+        return bool(result.matched_count)
+    digest = hashlib.sha256(code.strip().encode()).hexdigest()
+    result = await db.users.update_one(
+        {"id": user["id"], "recovery_codes": digest},
+        {"$pull": {"recovery_codes": digest}},
+    )
+    return bool(result.matched_count)
+
+
+@api.post("/account/2fa/setup")
+async def setup_2fa(body: SecurityBody, me=Depends(get_current_user)):
+    if not verify_pw(body.password, me["password"]):
+        raise HTTPException(403, "Current password is incorrect")
+    if me.get("two_factor_secret"):
+        raise HTTPException(409, "Two-step verification is already enabled")
+    secret = base64.b32encode(secrets.token_bytes(20)).decode()
+    await db.users.update_one(
+        {"id": me["id"]},
+        {"$set": {"two_factor_pending": secret, "two_factor_pending_at": now_iso()}},
+    )
+    return {
+        "secret": secret,
+        "uri": f'otpauth://totp/Glint:{urllib.parse.quote(me["username"])}?secret={secret}&issuer=Glint',
+    }
+
+
+@api.post("/account/2fa/enable")
+async def enable_2fa(body: SecurityBody, me=Depends(get_current_user)):
+    pending = me.get("two_factor_pending")
+    created = parse_iso_datetime(me.get("two_factor_pending_at"))
+    if (
+        not verify_pw(body.password, me["password"])
+        or not pending
+        or not created
+        or now_dt() - created > timedelta(minutes=10)
+    ):
+        raise HTTPException(403, "Start setup again")
+    counter = totp_counter(pending, body.code or "")
+    if counter is None:
+        raise HTTPException(400, "Invalid authenticator code")
+    codes = [secrets.token_hex(5) for _ in range(8)]
+    result = await db.users.update_one(
+        {
+            "id": me["id"],
+            "two_factor_pending": pending,
+            "two_factor_secret": {"$exists": False},
+        },
+        {
+            "$set": {
+                "two_factor_secret": pending,
+                "two_factor_counter": counter,
+                "recovery_codes": [
+                    hashlib.sha256(c.encode()).hexdigest() for c in codes
+                ],
+            },
+            "$unset": {"two_factor_pending": "", "two_factor_pending_at": ""},
+        },
+    )
+    if not result.matched_count:
+        raise HTTPException(409, "Setup changed. Start again.")
+    return {"ok": True, "recovery_codes": codes}
+
+
+@api.post("/account/2fa/disable")
+async def disable_2fa(body: SecurityBody, me=Depends(get_current_user)):
+    if (
+        not verify_pw(body.password, me["password"])
+        or not me.get("two_factor_secret")
+        or not await check_second_factor(me, body.code or "")
+    ):
+        raise HTTPException(403, "Password and valid second-factor code required")
+    await db.users.update_one(
+        {"id": me["id"]},
+        {
+            "$unset": {
+                "two_factor_secret": "",
+                "two_factor_counter": "",
+                "recovery_codes": "",
+            }
+        },
+    )
+    return {"ok": True}
+
+
+@api.get("/account/sessions")
+async def account_sessions(
+    authorization: Optional[str] = Header(None), me=Depends(get_current_user)
+):
+    payload = decode_token(authorization.split(" ", 1)[1])
+    return [
+        {
+            **{k: v for k, v in row.items() if k != "_id"},
+            "current": row["id"] == payload.get("sid"),
+        }
+        async for row in db.sessions.find({"user_id": me["id"], "revoked": False}).sort(
+            "created_at", -1
+        )
+    ]
+
+
+@api.post("/account/sessions/{session_id}/revoke")
+async def revoke_session(session_id: str, me=Depends(get_current_user)):
+    await db.sessions.update_one(
+        {"id": session_id, "user_id": me["id"]}, {"$set": {"revoked": True}}
+    )
+    return {"ok": True}
+
+
+@api.post("/account/sessions/logout-others")
+async def logout_other_sessions(
+    authorization: Optional[str] = Header(None), me=Depends(get_current_user)
+):
+    payload = decode_token(authorization.split(" ", 1)[1])
+    sid = payload.get("sid")
+    if not sid:
+        sid = new_id()
+        await db.sessions.insert_one(
+            {"id": sid, "user_id": me["id"], "created_at": now_iso(), "revoked": False}
+        )
+    await db.sessions.update_many(
+        {"user_id": me["id"], "id": {"$ne": sid}}, {"$set": {"revoked": True}}
+    )
+    await db.users.update_one(
+        {"id": me["id"]}, {"$set": {"legacy_sessions_revoked": True}}
+    )
+    payload["sid"] = sid
+    return {"ok": True, "token": jwt.encode(payload, JWT_SECRET, algorithm="HS256")}
+
+
+@api.post("/account/deactivate")
+async def deactivate_account(body: SecurityBody, me=Depends(get_current_user)):
+    if not verify_pw(body.password, me["password"]):
+        raise HTTPException(403, "Current password is incorrect")
+    await db.users.update_one({"id": me["id"]}, {"$set": {"deactivated": True}})
+    return {"ok": True}
+
+
+@api.get("/account/export")
+async def export_account(me=Depends(get_current_user)):
+    keys = [
+        "id",
+        "full_name",
+        "username",
+        "email",
+        "phone",
+        "bio",
+        "created_at",
+        "profile_details",
+        "settings",
+    ]
+    result = {"account": {k: me.get(k) for k in keys}}
+    for collection, query in [
+        ("posts", {"author_id": me["id"]}),
+        ("stories", {"author_id": me["id"]}),
+        ("messages", {"from_user": me["id"]}),
+        ("tickets", {"user_id": me["id"]}),
+    ]:
+        result[collection] = [
+            v async for v in db[collection].find(query, {"_id": 0}).limit(5000)
+        ]
+    return result
+
+
+@api.get("/account/activity")
+async def account_activity(me=Depends(get_current_user)):
+    return [
+        v
+        async for v in db.login_events.find({"user_id": me["id"]}, {"_id": 0})
+        .sort("created_at", -1)
+        .limit(100)
+    ]
+
+
+@api.get("/account/restriction")
+async def restriction_status(me=Depends(get_authenticated_user_allow_suspended)):
+    return {
+        "suspended": bool(me.get("suspended")),
+        "reason": me.get("suspend_reason"),
+        "appeals": await my_appeals(me),
+    }
+
+
+class ArchiveBody(BaseModel):
+    archived: bool
+
+
+@api.put("/account/posts/{post_id}/archive")
+async def archive_post(post_id: str, body: ArchiveBody, me=Depends(get_current_user)):
+    result = await db.posts.update_one(
+        {"id": post_id, "author_id": me["id"], "deleted_at": None},
+        {"$set": {"archived": body.archived}},
+    )
+    if not result.matched_count:
+        raise HTTPException(404, "Post not found")
+    return {"ok": True}
+
+
+@api.get("/account/archive")
+async def archived_posts(me=Depends(get_current_user)):
+    return [
+        await serialize_post(p, me["id"])
+        async for p in db.posts.find(
+            {"author_id": me["id"], "archived": True, "deleted_at": None}
+        )
+        .sort("created_at", -1)
+        .limit(200)
+    ]
+
 app.include_router(api)
 
 app.add_middleware(
