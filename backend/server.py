@@ -34,6 +34,8 @@ import storage_helper
 import play_billing
 from blue_profile_policy import normal_name_change_allowed
 from blue_tick_admin import set_manual_blue_tick
+from verification_badges import BADGES, display_badge
+from chat_actions import install_chat_actions, message_for_viewer
 from blue_verification_policy import assert_blue_application_allowed
 
 ROOT_DIR = Path(__file__).parent
@@ -593,6 +595,7 @@ def public_user(u: dict) -> dict:
         "location": u.get("location"),
         "verified": play_billing.blue_active(u),
         "blue_tick_active": play_billing.blue_active(u),
+        "verification_badge": display_badge(u, play_billing.blue_active),
         "privacy": u.get("privacy", "public"),
         "created_at": u.get("created_at"),
     }
@@ -603,18 +606,23 @@ async def are_friends(a: str, b: str) -> bool:
     return f is not None
 
 
-async def notify(to_user: str, from_user: str, ntype: str, ref_id: Optional[str], text: str):
+async def notify(to_user: str, from_user: str, ntype: str, ref_id: Optional[str], text: str, message_id: Optional[str] = None):
     if to_user == from_user:
         return
     recipient = await db.users.find_one({"id": to_user})
     if not recipient or recipient.get("suspended") or recipient.get("deleted_at") or recipient.get("deactivated"):
         return
+    if ntype == "message":
+        if from_user in recipient.get("chat_blocked", []): return
+        conversation = await db.conversations.find_one({"id": ref_id, "is_group": True}) if ref_id else None
+        if not conversation: conversation = await db.conversations.find_one({"id": conv_id_for(to_user, from_user)})
+        if conversation and to_user in conversation.get("muted_by", []): return
     pref = recipient.get("settings", {}).get("notifications", {}).get(ntype, "everyone")
     if pref == "off" or (pref == "friends" and not await are_friends(to_user, from_user)):
         return
     await db.notifications.insert_one({
         "id": new_id(), "to_user": to_user, "from_user": from_user,
-        "type": ntype, "ref_id": ref_id, "text": text,
+        "type": ntype, "ref_id": ref_id, "text": text, "message_id": message_id,
         "read": False, "created_at": now_iso(),
     })
 
@@ -752,6 +760,7 @@ class MessageCreate(BaseModel):
     text: Optional[str] = None
     media: Optional[str] = None
     duration: Optional[float] = None
+    reply_to: Optional[str] = None
 
 
 class GroupCreate(BaseModel):
@@ -765,6 +774,7 @@ class GroupSettingsBody(BaseModel):
     name: Optional[str] = None
     avatar: Optional[str] = None
     description: Optional[str] = None
+    send_permission: Optional[str] = None
 
 
 class GroupVerificationApplyBody(BaseModel):
@@ -1829,13 +1839,13 @@ async def report(body: ReportBody, me=Depends(get_current_user)):
         if target and me["id"] not in target.get("participants", []):
             raise HTTPException(403, "You can only report groups you belong to")
     else:
-        target = await db.messages.find_one({"id": body.target_id, "is_group": True, "deleted_at": None})
+        target = await db.messages.find_one({"id": body.target_id, "deleted_at": None})
         if target and target.get("from_user") == me["id"]:
             raise HTTPException(400, "You cannot report your own message")
         if target:
-            group = await db.conversations.find_one({"id": target.get("conversation_id"), "is_group": True})
+            group = await db.conversations.find_one({"id": target.get("conversation_id"), "deleted_at": None})
             if not group or me["id"] not in group.get("participants", []):
-                raise HTTPException(403, "You can only report messages from your groups")
+                raise HTTPException(403, "You can only report messages from your conversations")
     if not target:
         raise HTTPException(404, "Reported item not found")
 
@@ -2094,12 +2104,16 @@ def conv_id_for(a: str, b: str) -> str:
 
 @api.get("/chat/conversations")
 async def conversations(me=Depends(get_current_user)):
-    cur = db.conversations.find({"participants": me["id"]}).sort("updated_at", -1)
+    cur = db.conversations.find({"participants": me["id"], "deleted_at": None}).sort("updated_at", -1)
     out = []
     async for c in cur:
+        latest = await db.messages.find_one({"conversation_id": c["id"], "deleted_at": None, "hidden_by": {"$ne": me["id"]}}, sort=[("created_at", -1)])
+        c["last_message"] = ("Message removed" if latest.get("removed_for_everyone") else latest.get("text") or ("Photo" if latest.get("type") == "photo" else "Voice note")) if latest else None
+        c["last_type"] = latest.get("type", "text") if latest else "text"
         if c.get("is_group"):
+            if c.get("disabled"): continue
             unread = await db.messages.count_documents({
-                "conversation_id": c["id"], "from_user": {"$ne": me["id"]}, "read_by": {"$ne": me["id"]}})
+                "conversation_id": c["id"], "hidden_by": {"$ne": me["id"]}, "removed_for_everyone": {"$ne": True}, "from_user": {"$ne": me["id"]}, "read_by": {"$ne": me["id"]}})
             members = []
             for uid in c.get("participants", [])[:4]:
                 mu = await db.users.find_one({"id": uid}, {"_id": 0})
@@ -2130,7 +2144,7 @@ async def conversations(me=Depends(get_current_user)):
         if not u or u.get("suspended") or u.get("deactivated") or u["id"] in me.get("blocked", []) or me["id"] in u.get("blocked", []):
             continue
         unread = await db.messages.count_documents({
-            "conversation_id": c["id"], "to_user": me["id"], "seen_by_recipient": {"$ne": True}})
+            "conversation_id": c["id"], "hidden_by": {"$ne": me["id"]}, "removed_for_everyone": {"$ne": True}, "to_user": me["id"], "seen_by_recipient": {"$ne": True}})
         last_seen = u.get("last_seen")
         online = False
         if last_seen:
@@ -2191,12 +2205,14 @@ async def get_group(group_id: str, me=Depends(get_current_user)):
         mu = await db.users.find_one({"id": uid}, {"_id": 0})
         if mu:
             members.append(public_user(mu))
-    cur = db.messages.find({"conversation_id": group_id, "deleted_at": None}).sort("created_at", 1).limit(300)
+    cur = db.messages.find({"conversation_id": group_id, "deleted_at": None, "hidden_by": {"$ne": me["id"]}}).sort("created_at", -1).limit(300)
     msgs = []
     async for m in cur:
+        m = message_for_viewer(m, me)
+        if not m: continue
         sender = await db.users.find_one({"id": m["from_user"]}, {"_id": 0})
         msgs.append({
-            "id": m["id"], "from_user": m["from_user"],
+            "id": m["id"], "forwarded": bool(m.get("forwarded")), "reply_to": m.get("reply_to"), "from_user": m["from_user"],
             "sender_name": (sender or {}).get("full_name", "User"),
             "sender_avatar": (sender or {}).get("avatar"),
             "type": m.get("type", "text"), "text": m.get("text"),
@@ -2206,11 +2222,13 @@ async def get_group(group_id: str, me=Depends(get_current_user)):
     return {
         "id": group_id, "is_group": True, "name": conv.get("name"), "avatar": conv.get("avatar"),
         "description": conv.get("description"), "created_by": conv.get("created_by"), "admins": conv.get("admins", []),
-        "members": members, "member_count": len(members), "messages": msgs,
+        "members": members, "member_count": len(members), "messages": list(reversed(msgs)),
         "verified": bool(conv.get("verified", False)),
         "verification_status": conv.get("verification_status", "not_applied"),
         "verification_badge": conv.get("verification_badge"),
         "muted": me["id"] in conv.get("muted_by", []),
+        "privacy": conv.get("privacy", "private"),
+        "send_permission": conv.get("send_permission", "everyone"),
     }
 
 
@@ -2226,11 +2244,13 @@ async def get_conversation(user_id: str, me=Depends(get_current_user)):
     await db.messages.update_many(
         {"conversation_id": cid, "to_user": me["id"], "status": {"$ne": "read"}},
         {"$set": {"status": "read" if me.get("settings", {}).get("read_receipts",True) else "delivered", "seen_by_recipient":True}})
-    cur = db.messages.find({"conversation_id": cid}).sort("created_at", 1).limit(200)
+    cur = db.messages.find({"conversation_id": cid, "deleted_at": None, "hidden_by": {"$ne": me["id"]}}).sort("created_at", -1).limit(200)
     msgs = []
     async for m in cur:
+        m = message_for_viewer(m, me)
+        if not m: continue
         msgs.append({
-            "id": m["id"], "from_user": m["from_user"], "to_user": m["to_user"],
+            "id": m["id"], "forwarded": bool(m.get("forwarded")), "reply_to": m.get("reply_to"), "from_user": m["from_user"], "to_user": m["to_user"],
             "type": m.get("type", "text"), "text": m.get("text"),
             "media": m.get("media"), "duration": m.get("duration"),
             "status": m.get("status", "sent"), "created_at": m["created_at"],
@@ -2247,11 +2267,13 @@ async def get_conversation(user_id: str, me=Depends(get_current_user)):
     return {
         "id": cid,
         "user": public_user(other),
-        "messages": msgs,
+        "messages": list(reversed(msgs)),
         "online": online if other.get("settings", {}).get("active_status", True) else False,
         "last_seen": last_seen if other.get("settings", {}).get("active_status", True) else None,
         "muted": conv and me["id"] in conv.get("muted_by", []),
         "is_friend": await are_friends(me["id"], user_id),
+        "chat_blocked": user_id in me.get("chat_blocked", []),
+        "cannot_message": user_id in me.get("chat_blocked", []) or me["id"] in other.get("chat_blocked", []),
     }
 
 
@@ -2264,12 +2286,19 @@ async def send_message(body: MessageCreate, me=Depends(get_current_user)):
         raise HTTPException(400,'Enter a message or attach media')
     preview_of = lambda: body.text if body.type == "text" else ("📷 Photo" if body.type == "photo" else "🎤 Voice note")
 
+    reply_id = body.reply_to
+    if reply_id:
+        reply, reply_conv = await chat_action_routes["accessible"](reply_id, me)
+        expected = body.conversation_id or conv_id_for(me["id"], body.to_user or "")
+        if reply_conv["id"] != expected or reply.get("removed_for_everyone"): raise HTTPException(400, "Reply message unavailable")
     # group message
     if body.conversation_id:
         conv = await db.conversations.find_one({"id": body.conversation_id, "is_group": True})
         if conv:
             if me["id"] not in conv.get("participants", []):
                 raise HTTPException(403, "Not a group member")
+            if conv.get("send_permission") == "admins" and me["id"] != conv.get("created_by") and me["id"] not in conv.get("admins", []):
+                raise HTTPException(403, "Only group admins can send messages")
             if conv.get("disabled"):
                 raise HTTPException(403, f"Group disabled. Reason: {conv.get('disabled_reason') or 'Moderation action'}")
             if not await app_feature_enabled("group_messaging_enabled", True):
@@ -2277,15 +2306,15 @@ async def send_message(body: MessageCreate, me=Depends(get_current_user)):
             msg = {
                 "id": new_id(), "conversation_id": conv["id"], "from_user": me["id"], "to_user": None,
                 "is_group": True, "type": body.type, "text": body.text, "media": body.media,
-                "duration": body.duration, "read_by": [me["id"]], "created_at": now_iso(),
+                "duration": body.duration, "reply_to": reply_id, "read_by": [me["id"]], "created_at": now_iso(),
             }
             await db.messages.insert_one(msg)
             preview = f"{me['full_name'].split(' ')[0]}: {preview_of()}"
             await db.conversations.update_one({"id": conv["id"]}, {"$set": {
-                "last_message": preview, "last_type": body.type, "updated_at": now_iso()}})
+                "last_message": preview, "last_message_id": msg["id"], "last_type": body.type, "updated_at": now_iso()}})
             for uid in conv.get("participants", []):
                 if uid != me["id"]:
-                    await notify(uid, me["id"], "message", conv["id"], f"{conv.get('name')}: {me['full_name'].split(' ')[0]}: {preview_of()[:50]}")
+                    await notify(uid, me["id"], "message", conv["id"], f"{conv.get('name')}: {me['full_name'].split(' ')[0]}: {preview_of()[:50]}", message_id=msg["id"])
             return {
                 "id": msg["id"], "from_user": me["id"], "sender_name": me["full_name"], "sender_avatar": me.get("avatar"),
                 "type": msg["type"], "text": msg["text"], "media": msg["media"],
@@ -2308,16 +2337,16 @@ async def send_message(body: MessageCreate, me=Depends(get_current_user)):
     msg = {
         "id": new_id(), "conversation_id": cid, "from_user": me["id"], "to_user": to_user,
         "type": body.type, "text": body.text, "media": body.media,
-        "duration": body.duration, "status": "delivered", "created_at": now_iso(),
+        "duration": body.duration, "reply_to": reply_id, "status": "delivered", "created_at": now_iso(),
     }
     await db.messages.insert_one(msg)
     preview = preview_of()
-    await notify(to_user, me["id"], "message", me["id"], f"{me['full_name']}: {preview[:60]}")
+    await notify(to_user, me["id"], "message", me["id"], f"{me['full_name']}: {preview[:60]}", message_id=msg["id"])
     await db.conversations.update_one(
         {"id": cid},
         {"$set": {
             "id": cid, "participants": sorted([me["id"], to_user]),
-            "last_message": preview, "last_type": body.type, "updated_at": now_iso(),
+            "last_message": preview, "last_message_id": msg["id"], "last_type": body.type, "updated_at": now_iso(),
         }},
         upsert=True,
     )
@@ -2331,7 +2360,9 @@ async def send_message(body: MessageCreate, me=Depends(get_current_user)):
 @api.post("/chat/{conversation_id}/mute")
 async def mute_chat(conversation_id: str, me=Depends(get_current_user)):
     conv = await db.conversations.find_one({"id": conversation_id})
-    muted = conv.get("muted_by", []) if conv else []
+    if not conv or me["id"] not in conv.get("participants", []):
+        raise HTTPException(403, "Conversation unavailable")
+    muted = conv.get("muted_by", [])
     if me["id"] in muted:
         await db.conversations.update_one({"id": conversation_id}, {"$pull": {"muted_by": me["id"]}})
         return {"muted": False}
@@ -2363,6 +2394,9 @@ async def update_group_settings(group_id: str, body: GroupSettingsBody, me=Depen
         updates["avatar"] = body.avatar or None
     if body.description is not None:
         updates["description"] = body.description.strip()[:500] or None
+    if body.send_permission is not None:
+        if body.send_permission not in {"everyone", "admins"}: raise HTTPException(400, "Invalid message permission")
+        updates["send_permission"] = body.send_permission
     if updates:
         updates["updated_at"] = now_iso()
         await db.conversations.update_one({"id": group_id}, {"$set": updates})
@@ -2883,7 +2917,7 @@ async def blue_verify_purchase(body: PlayPurchaseBody, me=Depends(get_current_us
 async def blue_entitlements(me=Depends(get_current_user)):
     active = play_billing.blue_active(me)
     return {"ok": True, "blue": {
-        "active": active, "source": ("admin_manual" if me.get("blue_tick_manual") or me.get("blue_manual_grant") else "subscription") if active else None,
+        "active": active, "source": ("admin_manual" if me.get("blue_tick_manual") or me.get("blue_manual_grant") or me.get("manual_verification_badge") in BADGES else "subscription") if active else None,
         **{key: active for key in ("badge_everywhere", "impersonation_protection", "priority_support", "video_stories", "external_links")},
         "story_video_max_seconds": 60 if active else 0, "external_links_max": 2 if active else 0,
     }, "subscription": {"status": "active" if play_billing.payment_active(me) else "inactive",
@@ -3350,7 +3384,7 @@ def admin_safe_user(u: dict) -> dict:
         "phone_verified": bool(u.get("phone_verified")) or bool(u.get("phone") and not u.get("email") and u.get("verified")),
         "account_contact_verified": bool(u.get("verified")),
         "contact_visibility": u.get("contact_visibility", "only_me"),
-        "blue_tick": bool(u.get("golden_tick")),
+        "blue_tick": play_billing.blue_active(u),
         "sparks": u.get("sparks", 0),
         "last_seen": u.get("last_seen"),
         "suspended": bool(u.get("suspended")),
@@ -3511,6 +3545,21 @@ async def restore_user(user_id: str, body: AdminReasonBody = AdminReasonBody(rea
     return {"suspended": False}
 
 
+class AdminBadgeBody(BaseModel):
+    badge: Optional[str] = None
+    reason: str = "Glint Team verification"
+
+@api.post("/admin/users/{user_id}/badge")
+async def admin_badge(user_id: str, body: AdminBadgeBody, _=Depends(require_admin)):
+    if body.badge is not None and body.badge not in BADGES: raise HTTPException(400, "Unknown badge")
+    user = await db.users.find_one({"id": user_id, "deleted_at": None})
+    if not user: raise HTTPException(404, "User not found")
+    await db.users.update_one({"id": user_id}, {"$set": {"manual_verification_badge": body.badge, "manual_badge_reason": body.reason.strip(), "blue_tick_manual": body.badge == "blue", "blue_manual_grant": body.badge == "blue"}})
+    await admin_audit("set_verification_badge", "user", user_id, body.reason, user_id, {"badge": body.badge})
+    await admin_notify(user_id, "Your verification badge has been updated by the Glint Team.")
+    fresh = await db.users.find_one({"id": user_id})
+    return {"ok": True, "verification_badge": display_badge(fresh, play_billing.blue_active), "benefits_active": play_billing.blue_active(fresh)}
+
 @api.post("/admin/users/{user_id}/blue-tick")
 async def admin_blue_tick(user_id: str, body: AdminBlueTickBody, _=Depends(require_admin)):
     u = await db.users.find_one({"id": user_id})
@@ -3518,7 +3567,7 @@ async def admin_blue_tick(user_id: str, body: AdminBlueTickBody, _=Depends(requi
         raise HTTPException(404, "User not found")
     reason = (body.reason or ("Approved by Glint admin" if body.verified else "Verification removed by Glint admin")).strip()
     await set_manual_blue_tick(db, user_id, body.verified, reason)
-    await db.users.update_one({"id": user_id}, {"$set": {"golden_tick": body.verified, "blue_tick_manual": body.verified, "blue_source": "admin_manual" if body.verified else None}})
+    await db.users.update_one({"id": user_id}, {"$set": {"manual_verification_badge": "blue" if body.verified else None, "golden_tick": body.verified, "blue_tick_manual": body.verified, "blue_source": "admin_manual" if body.verified else None}})
     if body.verified:
         notice = f"Your account has been granted the Glint Blue Tick. Reason: {reason}"
         action = "grant_blue_tick"
@@ -4361,6 +4410,7 @@ async def request_data_deletion(
 
 from group_routes import install_group_management_routes
 install_group_management_routes(api, db, get_current_user, now_iso)
+chat_action_routes = install_chat_actions(api, lambda: db, get_current_user, now_iso, send_message, MessageCreate)
 # Settings are enforced by server routes, rather than display-only switches.
 DETAIL_KEYS = {
     "current_city",
@@ -4424,6 +4474,8 @@ async def require_audience(owner, audience, viewer):
 
 
 async def require_message_access(sender, recipient):
+    if recipient["id"] in sender.get("chat_blocked", []) or sender["id"] in recipient.get("chat_blocked", []):
+        raise HTTPException(403, "Messaging is blocked in this chat")
     if sender["id"] == recipient["id"]:
         raise HTTPException(400, "Choose another user")
     if recipient["id"] in sender.get("blocked", []):
