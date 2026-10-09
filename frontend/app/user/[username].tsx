@@ -148,7 +148,7 @@ export default function UserProfile() {
 
         <View style={styles.nameRow}>
           <Text style={styles.name}>{data.full_name}</Text>
-          {data.verified && <BlueTick size={20} />}
+          {data.verified && <BlueTick badge={data?.verification_badge} size={20} />}
         </View>
         <Text style={styles.username}>@{data.username}</Text>
         <ProfileLinks profile={data}/>

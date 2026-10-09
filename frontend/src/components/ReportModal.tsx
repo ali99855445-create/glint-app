@@ -45,7 +45,7 @@ export function ReportModal({
 }: {
   visible: boolean;
   onClose: () => void;
-  targetType: "user" | "post";
+  targetType: "user" | "post" | "group" | "message";
   targetId: string;
 }) {
   const styles = useStyles();

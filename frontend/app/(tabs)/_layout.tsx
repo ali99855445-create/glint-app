@@ -1,4 +1,5 @@
-import React from "react";
+import {ActionSheet,SheetAction} from "@/src/components/MessageActions";
+import React, {useState} from "react";
 import { View, Text, Pressable } from "react-native";
 import { Tabs, useRouter, usePathname } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -11,6 +12,7 @@ export default function TabsLayout() {
     router = useRouter(),
     path = usePathname(),
     insets = useSafeAreaInsets();
+  const [menu,setMenu]=useState(false);
   const notifications = useQuery({
     queryKey: ["unread-count"],
     queryFn: () => api.get("/notifications/unread-count"),
@@ -58,7 +60,9 @@ export default function TabsLayout() {
           <Icon name="search" size={20} color={c.muted} />
           <Text style={{ color: c.muted }}>Search Glint</Text>
         </Pressable>
+        <Pressable accessibilityLabel="Open Glint menu" onPress={()=>setMenu(true)} style={{padding:6}}><Icon name="menu" size={27} color={c.onSurface}/></Pressable>
       </View>
+      <ActionSheet visible={menu} onClose={()=>setMenu(false)} title="Glint menu"><SheetAction label="Settings" onPress={()=>{setMenu(false);router.push("/settings");}}/><SheetAction label="Help Center" onPress={()=>{setMenu(false);router.push("/help");}}/><SheetAction label="My profile" onPress={()=>{setMenu(false);router.navigate("/(tabs)/profile");}}/></ActionSheet>
       <View
         style={{
           flexDirection: "row",

@@ -74,7 +74,7 @@ export default function FollowsScreen() {
             <Pressable style={styles.row} onPress={() => router.push(`/user/${item.username}`)}>
               <Avatar uri={item.avatar} name={item.full_name} size={50} />
               <View style={{ flex: 1 }}>
-                <UserName name={item.full_name} verified={item.verified} size={15} />
+                <UserName name={item.full_name} verified={item.verified} badge={item.verification_badge} size={15} />
                 <Text style={styles.username}>@{item.username}</Text>
               </View>
               {item.id !== user?.id && (

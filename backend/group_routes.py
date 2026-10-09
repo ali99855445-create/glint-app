@@ -33,7 +33,7 @@ class GroupAdminBody(BaseModel):
 
 def install_group_management_routes(api, db, get_current_user, now_iso):
     async def _group(group_id: str):
-        group = await db.conversations.find_one({"id": group_id, "is_group": True})
+        group = await db.conversations.find_one({"id": group_id, "is_group": True, "deleted_at": None})
         if not group:
             raise HTTPException(404, "Group not found")
         return group
@@ -85,6 +85,33 @@ def install_group_management_routes(api, db, get_current_user, now_iso):
         update["$set"] = {"updated_at": now_iso()}
         await db.conversations.update_one({"id": group_id}, update)
         return {"ok": True, "admin": body.admin}
+
+    @api.post("/chat/group/{group_id}/members/add")
+    async def add_member(group_id: str, body: GroupMemberBody, me=Depends(get_current_user)):
+        group = await _group(group_id)
+        if not is_admin(group, me["id"]): raise HTTPException(403, "Group admin only")
+        target = await db.users.find_one({"id": body.user_id, "deleted_at": None, "suspended": {"$ne": True}, "deactivated": {"$ne": True}})
+        if not target: raise HTTPException(404, "Account not found")
+        if me["id"] in target.get("blocked", []) or body.user_id in me.get("blocked", []) or me["id"] in target.get("chat_blocked", []): raise HTTPException(403, "Cannot add this account")
+        if len(group.get("participants", [])) >= 200: raise HTTPException(400, "Group member limit reached")
+        await db.conversations.update_one({"id": group_id}, {"$addToSet": {"participants": body.user_id}, "$set": {"updated_at": now_iso()}})
+        return {"ok": True}
+
+    @api.post("/chat/group/{group_id}/leave")
+    async def leave_group(group_id: str, me=Depends(get_current_user)):
+        group = await _group(group_id)
+        if not is_member(group, me["id"]): raise HTTPException(403, "Not a group member")
+        if group.get("created_by") == me["id"]: raise HTTPException(400, "Transfer ownership before leaving")
+        await db.conversations.update_one({"id": group_id}, {"$pull": {"participants": me["id"], "admins": me["id"]}, "$set": {"updated_at": now_iso()}})
+        return {"ok": True}
+
+    @api.post("/chat/group/{group_id}/owner")
+    async def transfer_owner(group_id: str, body: GroupMemberBody, me=Depends(get_current_user)):
+        group = await _group(group_id)
+        if group.get("created_by") != me["id"]: raise HTTPException(403, "Group owner only")
+        if body.user_id == me["id"] or not is_member(group, body.user_id): raise HTTPException(400, "Choose another group member")
+        await db.conversations.update_one({"id": group_id, "created_by": me["id"]}, {"$set": {"created_by": body.user_id, "updated_at": now_iso()}, "$addToSet": {"admins": body.user_id}})
+        return {"ok": True}
 
     @api.delete("/chat/group/{group_id}")
     async def delete_group(group_id: str, me=Depends(get_current_user)):

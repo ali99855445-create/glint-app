@@ -77,7 +77,7 @@ export default function NewGroup() {
               <Pressable style={styles.row} onPress={() => toggle(item.id)} testID={`group-select-${item.username}`}>
                 <Avatar uri={item.avatar} name={item.full_name} size={48} />
                 <View style={{ flex: 1 }}>
-                  <UserName name={item.full_name} verified={item.verified} size={15} />
+                  <UserName name={item.full_name} verified={item.verified} badge={item.verification_badge} size={15} />
                   <Text style={styles.username}>@{item.username}</Text>
                 </View>
                 <View style={[styles.check, on && { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary }]}>

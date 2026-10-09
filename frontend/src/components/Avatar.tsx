@@ -35,8 +35,8 @@ export function Avatar({ uri, name, size = 44, ring, character }: { character?:s
 
 // Facebook-style verification seal: blue rosette with a crisp white check.
 // It is Glint's own implementation and does not use Meta/Facebook artwork.
-export function BlueTick({ size = 15 }: { size?: number }) {
-  const blue = "#1877F2";
+export function BlueTick({ size = 15, badge = "blue" }: { size?: number; badge?:string }) {
+  const blue = ({blue:"#1877F2",golden:"#B87900",green:"#168447",silver:"#687686",business:"#D46A0A"} as Record<string,string>)[badge] || "#1877F2";
   const petal = {
     position: "absolute" as const,
     width: size * 0.76,
@@ -68,12 +68,14 @@ export function BlueTick({ size = 15 }: { size?: number }) {
 export function UserName({
   name,
   verified,
+  badge,
   size = 15,
   bold = true,
   color,
 }: {
   name?: string;
   verified?: boolean;
+  badge?:string;
   size?: number;
   bold?: boolean;
   color?: string;
@@ -84,7 +86,7 @@ export function UserName({
       <Text style={{ color: color || colors.onSurface, fontFamily: bold ? fonts.semibold : fonts.text, fontSize: size }} numberOfLines={1}>
         {name}
       </Text>
-      {verified && <BlueTick size={size} />}
+      {verified && <BlueTick size={size} badge={badge} />}
     </View>
   );
 }

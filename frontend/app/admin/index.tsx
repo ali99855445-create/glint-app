@@ -258,7 +258,7 @@ export default function AdminDashboard() {
                   <View style={styles.userRow}>
                     <Avatar uri={u.avatar} name={u.full_name} size={46} />
                     <View style={{ flex: 1 }}>
-                      <UserName name={u.full_name} verified={u.blue_tick} size={15} />
+                      <UserName name={u.full_name} verified={u.blue_tick} badge={u.verification_badge} size={15} />
                       <Text style={styles.cardMeta}>@{u.username}{u.suspended ? " · Suspended" : ""}</Text>
                       <Text style={styles.cardMeta}>{u.email || u.phone || "No contact"}</Text>
                       {(u.posting_restricted_until || u.messaging_restricted_until) ? <Text style={styles.warningText}>Feature restriction active</Text> : null}
@@ -369,7 +369,7 @@ export default function AdminDashboard() {
                   <View style={styles.userRow}>
                     <Avatar uri={v.user?.avatar} name={v.user?.full_name} size={44} />
                     <View style={{ flex: 1 }}>
-                      <UserName name={v.user?.full_name} verified={v.user?.verified} size={15} />
+                      <UserName name={v.user?.full_name} verified={v.user?.verified} badge={v.user?.verification_badge} size={15} />
                       <Text style={styles.cardMeta}>Legal name: {v.full_legal_name}</Text>
                     </View>
                     <StatusPill status={v.status} />

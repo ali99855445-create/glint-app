@@ -160,7 +160,7 @@ export default function Settings() {
           <Row icon="trash-outline" label="Delete account" danger onPress={() => setConfirmDelete(true)} testID="settings-delete" />
         </View>
 
-        <Text style={styles.version}>Glint v1.0.19 · @{user?.username}</Text>
+        <Text style={styles.version}>Glint v1.0.20 · @{user?.username}</Text>
       </ScrollView></SettingsSearch.Provider>
 
       <Modal visible={!!privacyPicker} transparent animationType="fade" onRequestClose={() => setPrivacyPicker(null)}>

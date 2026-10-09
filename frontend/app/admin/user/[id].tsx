@@ -95,6 +95,7 @@ export default function AdminUserDetail() {
     onError: (e: any) => toast.show(e.message || "Could not update profile", "error"),
   });
 
+  const badgeMut=useMutation({mutationFn:(badge:string|null)=>api.post(`/admin/users/${id}/badge`,{badge,reason:'Glint Team manual badge assignment'},true),onSuccess:()=>{detail.refetch();qc.invalidateQueries();toast.show('Badge and benefits updated','success');},onError:(e:any)=>toast.show(e.message,'error')});
   const runAction = useMutation({
     mutationFn: async () => {
       if (!action) return;
@@ -196,7 +197,7 @@ export default function AdminUserDetail() {
           <View style={styles.profileTop}>
             <Avatar uri={u.avatar} name={u.full_name} size={72} />
             <View style={{ flex: 1 }}>
-              <UserName name={u.full_name} verified={u.blue_tick} size={19} />
+              <UserName name={u.full_name} verified={u.blue_tick} badge={u.verification_badge} size={19} />
               <Text style={styles.username}>@{u.username}</Text>
               <View style={styles.pills}>
                 <Pill text={statusText} tone={u.suspended || u.permanent_deleted ? "danger" : "good"} />
@@ -241,6 +242,8 @@ export default function AdminUserDetail() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account & safety controls</Text>
+          <Text style={{color:colors.onSurface,fontSize:17,fontWeight:'600'}}>Verification badges — admin only</Text><Text style={{color:colors.muted}}>Public paid applications remain Blue. Manual badges unlock the verification benefits.</Text>
+          <View style={{flexDirection:'row',flexWrap:'wrap',gap:8,marginVertical:12}}>{['blue','golden','green','silver','business'].map(b=><Pressable key={b} disabled={badgeMut.isPending} style={{padding:12,borderWidth:1,borderColor:u.verification_badge===b?colors.brand:colors.border,borderRadius:8}} onPress={()=>badgeMut.mutate(b)}><Text style={{color:colors.onSurface}}>{b[0].toUpperCase()+b.slice(1)}{u.verification_badge===b?' ✓':''}</Text></Pressable>)}<Pressable disabled={badgeMut.isPending} onPress={()=>badgeMut.mutate(null)} style={{padding:12}}><Text style={{color:colors.error}}>Remove manual badge</Text></Pressable></View>
           <View style={styles.actionGrid}>
             <Button
               title={u.blue_tick ? "Remove Blue Tick" : "Grant Blue Tick"}

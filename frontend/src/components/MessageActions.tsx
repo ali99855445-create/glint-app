@@ -1,0 +1,24 @@
+import {ReportModal} from "./ReportModal";
+import React, {useState} from 'react';
+import {Modal,View,Text,Pressable,TextInput,ScrollView,ActivityIndicator,Alert} from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import {useQuery} from '@tanstack/react-query';
+import {api} from '@/src/api/client';
+import {useTheme} from '@/src/theme';
+import {useToast} from './Toast';
+import {Avatar} from './Avatar';
+
+export function ActionSheet({visible,onClose,children,title}:{visible:boolean;onClose:()=>void;children:React.ReactNode;title:string}) {
+ const {colors:c}=useTheme();
+ return <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}><View style={{flex:1,backgroundColor:'#0007',justifyContent:'flex-end'}}><Pressable style={{flex:1}} onPress={onClose}/><View style={{backgroundColor:c.surface,padding:20,paddingBottom:36,borderTopLeftRadius:20,borderTopRightRadius:20,maxHeight:'80%'}}><View style={{flexDirection:'row',justifyContent:'space-between',marginBottom:12}}><Text style={{fontSize:19,fontWeight:'600',color:c.onSurface}}>{title}</Text><Pressable onPress={onClose}><Text style={{color:c.brand,fontSize:16}}>Close</Text></Pressable></View>{children}</View></View></Modal>;
+}
+export function SheetAction({label,onPress,disabled=false}:{label:string;onPress:()=>void;disabled?:boolean}){const {colors:c}=useTheme();return <Pressable disabled={disabled} onPress={onPress} style={{paddingVertical:16,opacity:disabled?.4:1}}><Text style={{color:c.onSurface,fontSize:16}}>{label}</Text></Pressable>;}
+export function MessageActions({message,onClose,onChanged,onReply}:{message:any;onClose:()=>void;onChanged:()=>void;onReply:(m:any)=>void}) {
+ const {colors:c}=useTheme();const toast=useToast();const [report,setReport]=useState(false);const [forward,setForward]=useState(false),[search,setSearch]=useState(''),[busy,setBusy]=useState(false);
+ const chats=useQuery({queryKey:['forward-conversations'],queryFn:()=>api.get('/chat/conversations'),enabled:forward});
+ const people=useQuery({queryKey:['forward-users',search],queryFn:()=>api.get('/users/search?q='+encodeURIComponent(search)),enabled:forward&&search.trim().length>1});
+ async function action(path:string,body:any){setBusy(true);try{await api.post(path,body);onChanged();setForward(false);onClose();toast.show('Done','success');}catch(e:any){toast.show(e.message,'error');}finally{setBusy(false);}}
+ function remove(scope:string){Alert.alert(scope==='everyone'?'Remove for everyone?':'Delete for you?',scope==='everyone'?'The message will no longer be visible to chat participants.':'Other participants keep their copy.',[{text:'Cancel',style:'cancel'},{text:'Remove',style:'destructive',onPress:()=>action(`/chat/messages/${message.id}/delete`,{scope})}]);}
+ const targets=search.trim().length>1?[...(people.data||[]).map((u:any)=>({id:u.id,name:u.full_name,avatar:u.avatar,to_user:u.id})),...(chats.data||[]).filter((x:any)=>x.is_group&&x.name?.toLowerCase().includes(search.toLowerCase())).map((x:any)=>({id:x.id,name:x.name,avatar:x.avatar,conversation_id:x.id}))]:(chats.data||[]).map((x:any)=>({id:x.id,name:x.is_group?x.name:x.user?.full_name,avatar:x.is_group?x.avatar:x.user?.avatar,...(x.is_group?{conversation_id:x.id}:{to_user:x.user?.id})}));
+ return <><ReportModal visible={report} onClose={()=>{setReport(false);onClose();}} targetType="message" targetId={message?.id||""}/><ActionSheet visible={!!message&&!report} onClose={()=>{setForward(false);onClose();}} title={forward?'Forward message':'Message options'}>{busy?<ActivityIndicator color={c.brand}/>:forward?<><TextInput value={search} onChangeText={setSearch} placeholder="Search people and groups" placeholderTextColor={c.muted} style={{padding:12,color:c.onSurface,backgroundColor:c.surfaceSecondary,borderRadius:10}}/><ScrollView>{targets.map((t:any)=><Pressable key={t.id} onPress={()=>action(`/chat/messages/${message.id}/forward`,t.conversation_id?{conversation_id:t.conversation_id}:{to_user:t.to_user})} style={{flexDirection:'row',gap:12,alignItems:'center',paddingVertical:12}}><Avatar name={t.name} uri={t.avatar}/><Text style={{color:c.onSurface,fontSize:16}}>{t.name}</Text></Pressable>)}{!targets.length&&<Text style={{padding:16,color:c.muted}}>Search for a recipient.</Text>}</ScrollView></>:<>{message?.type!=='removed'&&<><SheetAction label="Reply" onPress={()=>{onReply(message);onClose();}}/><SheetAction label="Forward" onPress={()=>setForward(true)}/>{message?.text&&<SheetAction label="Copy text" onPress={async()=>{await Clipboard.setStringAsync(message.text);toast.show('Copied','success');onClose();}}/>}</>}{!message?.mine&&message?.type!=="removed"&&<SheetAction label="Report message" onPress={()=>setReport(true)}/>}<SheetAction label="Delete for me" onPress={()=>remove('me')}/>{message?.mine&&message.type!=='removed'&&<SheetAction label="Remove for everyone" onPress={()=>remove('everyone')}/>}</>}</ActionSheet></>;
+}

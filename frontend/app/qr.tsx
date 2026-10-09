@@ -43,7 +43,7 @@ export default function QRShare() {
         <View style={styles.card}>
           <Avatar uri={user?.avatar} name={user?.full_name} size={72} />
           <View style={styles.nameRow}>
-            <UserName name={user?.full_name} verified={user?.verified} size={20} />
+            <UserName name={user?.full_name} verified={user?.verified} badge={user?.verification_badge} size={20} />
           </View>
           <Text style={styles.handle}>{link}</Text>
           <View style={styles.qrWrap}>

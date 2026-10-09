@@ -3,6 +3,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { api, setToken, getToken, setRestrictedToken } from "@/src/api/client";
 
 export type User = {
+  verification_badge?: string;
   id: string;
   full_name: string;
   username: string;

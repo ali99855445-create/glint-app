@@ -66,7 +66,7 @@ export default function InnerCircle() {
                   <View key={u.id} style={styles.row}>
                     <Avatar uri={u.avatar} name={u.full_name} size={48} ring />
                     <View style={{ flex: 1 }}>
-                      <UserName name={u.full_name} verified={u.verified} size={15} />
+                      <UserName name={u.full_name} verified={u.verified} badge={u.verification_badge} size={15} />
                       <Text style={styles.username}>@{u.username}</Text>
                     </View>
                     <Pressable style={styles.removeBtn} onPress={() => remove.mutate(u.id)} testID={`inner-remove-${u.username}`}>
@@ -82,7 +82,7 @@ export default function InnerCircle() {
             <View style={styles.row}>
               <Avatar uri={item.avatar} name={item.full_name} size={48} />
               <View style={{ flex: 1 }}>
-                <UserName name={item.full_name} verified={item.verified} size={15} />
+                <UserName name={item.full_name} verified={item.verified} badge={item.verification_badge} size={15} />
                 <Text style={styles.username}>@{item.username}</Text>
               </View>
               <Pressable style={styles.addBtn} onPress={() => add.mutate(item.id)} testID={`inner-add-${item.username}`}>
