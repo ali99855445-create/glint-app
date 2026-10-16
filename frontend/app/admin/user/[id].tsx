@@ -47,6 +47,9 @@ export default function AdminUserDetail() {
 
   const [action, setAction] = useState<PendingAction | null>(null);
   const [reason, setReason] = useState("");
+  const [badgeDays, setBadgeDays] = useState("30");
+  const [badgePermanent, setBadgePermanent] = useState(false);
+  const [selectedBadge, setSelectedBadge] = useState("blue");
   const [postingDays, setPostingDays] = useState("7");
   const [messagingDays, setMessagingDays] = useState("7");
 
@@ -65,6 +68,16 @@ export default function AdminUserDetail() {
   });
 
   const u = detail.data?.user;
+
+  useEffect(() => {
+    if (!u) return;
+    setSelectedBadge(u.manual_badge || "blue");
+    setBadgePermanent(Boolean(u.manual_badge && !u.manual_badge_expires_at));
+    if (u.manual_badge_expires_at) {
+      const remaining = Math.ceil((Date.parse(u.manual_badge_expires_at) - Date.now()) / 86400000);
+      setBadgeDays(String(Math.max(1, remaining)));
+    }
+  }, [u?.id, u?.manual_badge, u?.manual_badge_expires_at]);
 
   useEffect(() => {
     if (!u || !editOpen) return;
@@ -95,7 +108,21 @@ export default function AdminUserDetail() {
     onError: (e: any) => toast.show(e.message || "Could not update profile", "error"),
   });
 
-  const badgeMut=useMutation({mutationFn:(badge:string|null)=>api.post(`/admin/users/${id}/badge`,{badge,reason:'Glint Team manual badge assignment'},true),onSuccess:()=>{detail.refetch();qc.invalidateQueries();toast.show('Badge and benefits updated','success');},onError:(e:any)=>toast.show(e.message,'error')});
+  const badgeDuration = () => {
+    if (badgePermanent) return null;
+    if (!/^\d+$/.test(badgeDays) || Number(badgeDays) < 1 || Number(badgeDays) > 36500) {
+      throw new Error("Enter a duration between 1 and 36500 days");
+    }
+    return Number(badgeDays);
+  };
+  const badgeMut = useMutation({
+    mutationFn: (badge: string | null) => api.post(`/admin/users/${id}/badge`, {
+      badge, duration_days: badge ? badgeDuration() : null,
+      reason: 'Glint Team manual badge assignment',
+    }, true),
+    onSuccess: () => { detail.refetch(); qc.invalidateQueries(); toast.show('Badge duration and benefits updated', 'success'); },
+    onError: (e: any) => toast.show(e.message, 'error'),
+  });
   const runAction = useMutation({
     mutationFn: async () => {
       if (!action) return;
@@ -106,7 +133,7 @@ export default function AdminUserDetail() {
         case "restore":
           return api.post(`/admin/users/${id}/restore`, { reason: why }, true);
         case "grant":
-          return api.post(`/admin/users/${id}/blue-tick`, { verified: true, reason: why }, true);
+          return api.post(`/admin/users/${id}/blue-tick`, { verified: true, reason: why, duration_days: badgeDuration() }, true);
         case "revoke":
           return api.post(`/admin/users/${id}/blue-tick`, { verified: false, reason: why }, true);
         case "deleteAccount":
@@ -243,14 +270,22 @@ export default function AdminUserDetail() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account & safety controls</Text>
           <Text style={{color:colors.onSurface,fontSize:17,fontWeight:'600'}}>Verification badges — admin only</Text><Text style={{color:colors.muted}}>Public paid applications remain Blue. Manual badges unlock the verification benefits.</Text>
-          <View style={{flexDirection:'row',flexWrap:'wrap',gap:8,marginVertical:12}}>{['blue','golden','green','silver','business'].map(b=><Pressable key={b} disabled={badgeMut.isPending} style={{padding:12,borderWidth:1,borderColor:u.verification_badge===b?colors.brand:colors.border,borderRadius:8}} onPress={()=>badgeMut.mutate(b)}><Text style={{color:colors.onSurface}}>{b[0].toUpperCase()+b.slice(1)}{u.verification_badge===b?' ✓':''}</Text></Pressable>)}<Pressable disabled={badgeMut.isPending} onPress={()=>badgeMut.mutate(null)} style={{padding:12}}><Text style={{color:colors.error}}>Remove manual badge</Text></Pressable></View>
+          <Text style={{color:colors.muted, marginTop:8}}>
+            {u.manual_badge ? `${u.manual_badge_active ? 'Active' : 'Expired'} manual badge: ${u.manual_badge}. ${u.manual_badge_expires_at ? 'Expiry: ' + new Date(u.manual_badge_expires_at).toLocaleString() : 'Permanent'}` : 'No manual badge assigned.'}
+          </Text>
+          <View style={{flexDirection:'row',flexWrap:'wrap',gap:8,marginVertical:12}}>
+            {['blue','golden','green','silver','business'].map(b => <Pressable key={b} accessibilityRole="radio" accessibilityState={{checked:selectedBadge===b}} onPress={()=>setSelectedBadge(b)} style={{padding:12,borderWidth:1,borderColor:selectedBadge===b?colors.brand:colors.border,borderRadius:8}}><Text style={{color:colors.onSurface}}>{b[0].toUpperCase()+b.slice(1)}{selectedBadge===b?' ✓':''}</Text></Pressable>)}
+          </View>
+          <Text style={{color:colors.onSurface}}>Duration from now</Text>
+          <View style={{flexDirection:'row',flexWrap:'wrap',gap:8,marginVertical:8}}>
+            {[7,30,90].map(days=><Pressable key={days} onPress={()=>{setBadgeDays(String(days));setBadgePermanent(false);}} style={{padding:10,borderWidth:1,borderRadius:8,borderColor:!badgePermanent&&badgeDays===String(days)?colors.brand:colors.border}}><Text style={{color:colors.onSurface}}>{days} days</Text></Pressable>)}
+            <Pressable onPress={()=>setBadgePermanent(true)} style={{padding:10,borderWidth:1,borderRadius:8,borderColor:badgePermanent?colors.brand:colors.border}}><Text style={{color:colors.onSurface}}>Permanent{badgePermanent?' ✓':''}</Text></Pressable>
+          </View>
+          <TextInput accessibilityLabel="Custom badge duration in days" value={badgeDays} keyboardType="number-pad" placeholder="Custom days" placeholderTextColor={colors.muted} onChangeText={value=>{setBadgeDays(value);setBadgePermanent(false);}} style={{color:colors.onSurface,padding:12,borderWidth:1,borderColor:colors.border,borderRadius:8,marginBottom:8}}/>
+          <Text style={{color:colors.muted,marginBottom:10}}>Saving starts the selected duration from now. At expiry the manual badge and its benefits stop automatically. An active paid Blue subscription is kept.</Text>
+          <Button title={badgeMut.isPending?'Saving…':'Save badge and duration'} disabled={badgeMut.isPending} onPress={()=>badgeMut.mutate(selectedBadge)}/>
+          <Button title="Remove manual badge" variant="secondary" disabled={badgeMut.isPending} onPress={()=>badgeMut.mutate(null)} style={{marginVertical:8}}/>
           <View style={styles.actionGrid}>
-            <Button
-              title={u.blue_tick ? "Remove Blue Tick" : "Grant Blue Tick"}
-              small variant="secondary"
-              onPress={() => openAction({ kind: u.blue_tick ? "revoke" : "grant", title: u.blue_tick ? "Remove Blue Tick" : "Grant Blue Tick" }, u.blue_tick ? "Blue Tick removed by Glint Team" : "Blue Tick granted by Glint Team")}
-              style={{ flex: 1 }}
-            />
             <Button
               title={u.suspended ? "Restore account" : "Suspend account"}
               small variant="secondary"

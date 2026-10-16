@@ -34,7 +34,8 @@ import storage_helper
 import play_billing
 from blue_profile_policy import normal_name_change_allowed
 from blue_tick_admin import set_manual_blue_tick
-from verification_badges import BADGES, display_badge
+from verification_badges import BADGES, display_badge, manual_badge, configured_manual_badge, manual_badge_update
+from blue_tick import resolve_blue_entitlements
 from chat_actions import install_chat_actions, message_for_viewer
 from blue_verification_policy import assert_blue_application_allowed
 
@@ -596,6 +597,7 @@ def public_user(u: dict) -> dict:
         "verified": play_billing.blue_active(u),
         "blue_tick_active": play_billing.blue_active(u),
         "verification_badge": display_badge(u, play_billing.blue_active),
+        "manual_badge_expires_at": u.get("manual_badge_expires_at") if manual_badge(u) else None,
         "privacy": u.get("privacy", "public"),
         "created_at": u.get("created_at"),
     }
@@ -831,6 +833,7 @@ class AdminSuspendBody(BaseModel):
 
 
 class AdminBlueTickBody(BaseModel):
+    duration_days: Optional[int] = Field(default=None, ge=1, le=36500, strict=True)
     verified: bool
     reason: Optional[str] = None
 
@@ -2915,11 +2918,8 @@ async def blue_verify_purchase(body: PlayPurchaseBody, me=Depends(get_current_us
 
 @api.get("/blue/entitlements")
 async def blue_entitlements(me=Depends(get_current_user)):
-    active = play_billing.blue_active(me)
-    return {"ok": True, "blue": {
-        "active": active, "source": ("admin_manual" if me.get("blue_tick_manual") or me.get("blue_manual_grant") or me.get("manual_verification_badge") in BADGES else "subscription") if active else None,
-        **{key: active for key in ("badge_everywhere", "impersonation_protection", "priority_support", "video_stories", "external_links")},
-        "story_video_max_seconds": 60 if active else 0, "external_links_max": 2 if active else 0,
+    return {"ok": True, "blue": resolve_blue_entitlements(me), "manual_badge": {
+        "badge": manual_badge(me), "expires_at": me.get("manual_badge_expires_at"),
     }, "subscription": {"status": "active" if play_billing.payment_active(me) else "inactive",
         "ends_at": me.get("blue_subscription_ends_at"), "auto_renew": bool(me.get("blue_subscription_auto_renew"))}}
 
@@ -3032,6 +3032,7 @@ async def profile_edit_v2(body: ProfileEditV2, me=Depends(get_current_user)):
 
 
 class ManualBlueBody(BaseModel):
+    duration_days: Optional[int] = Field(default=None, ge=1, le=36500, strict=True)
     user_id: str
     enabled: bool
 
@@ -3041,7 +3042,7 @@ async def manual_blue(body: ManualBlueBody, admin=Depends(require_review_admin))
     user = await db.users.find_one({"id": body.user_id, "deleted_at": None})
     if not user:
         raise HTTPException(404, "User not found")
-    await set_manual_blue_tick(db, body.user_id, body.enabled)
+    await set_manual_blue_tick(db, body.user_id, body.enabled, duration_days=body.duration_days)
     paid = bool(user.get("blue_identity_approved")) and play_billing.payment_active(user)
     await db.users.update_one({"id": body.user_id}, {"$set": {"golden_tick": body.enabled or paid, "blue_tick_manual": body.enabled, "blue_source": "admin_manual" if body.enabled else "subscription" if paid else None}})
     await admin_audit("manual_blue", "user", body.user_id, "Manual Blue grant updated", body.user_id)
@@ -3385,6 +3386,9 @@ def admin_safe_user(u: dict) -> dict:
         "account_contact_verified": bool(u.get("verified")),
         "contact_visibility": u.get("contact_visibility", "only_me"),
         "blue_tick": play_billing.blue_active(u),
+        "manual_badge": configured_manual_badge(u),
+        "manual_badge_active": manual_badge(u) is not None,
+        "manual_badge_expires_at": u.get("manual_badge_expires_at"),
         "sparks": u.get("sparks", 0),
         "last_seen": u.get("last_seen"),
         "suspended": bool(u.get("suspended")),
@@ -3546,6 +3550,7 @@ async def restore_user(user_id: str, body: AdminReasonBody = AdminReasonBody(rea
 
 
 class AdminBadgeBody(BaseModel):
+    duration_days: Optional[int] = Field(default=None, ge=1, le=36500, strict=True)
     badge: Optional[str] = None
     reason: str = "Glint Team verification"
 
@@ -3554,11 +3559,11 @@ async def admin_badge(user_id: str, body: AdminBadgeBody, _=Depends(require_admi
     if body.badge is not None and body.badge not in BADGES: raise HTTPException(400, "Unknown badge")
     user = await db.users.find_one({"id": user_id, "deleted_at": None})
     if not user: raise HTTPException(404, "User not found")
-    await db.users.update_one({"id": user_id}, {"$set": {"manual_verification_badge": body.badge, "manual_badge_reason": body.reason.strip(), "blue_tick_manual": body.badge == "blue", "blue_manual_grant": body.badge == "blue"}})
-    await admin_audit("set_verification_badge", "user", user_id, body.reason, user_id, {"badge": body.badge})
-    await admin_notify(user_id, "Your verification badge has been updated by the Glint Team.")
+    await db.users.update_one({"id": user_id}, {"$set": manual_badge_update(body.badge, body.duration_days, body.reason)})
+    await admin_audit("set_verification_badge", "user", user_id, body.reason, user_id, {"badge": body.badge, "duration_days": body.duration_days})
+    await admin_notify(user_id, f"Your verification badge and benefits have been updated by the Glint Team.{' Valid for ' + str(body.duration_days) + ' days.' if body.badge and body.duration_days else ''}")
     fresh = await db.users.find_one({"id": user_id})
-    return {"ok": True, "verification_badge": display_badge(fresh, play_billing.blue_active), "benefits_active": play_billing.blue_active(fresh)}
+    return {"ok": True, "verification_badge": display_badge(fresh, play_billing.blue_active), "benefits_active": play_billing.blue_active(fresh), "manual_badge_expires_at": fresh.get("manual_badge_expires_at")}
 
 @api.post("/admin/users/{user_id}/blue-tick")
 async def admin_blue_tick(user_id: str, body: AdminBlueTickBody, _=Depends(require_admin)):
@@ -3566,7 +3571,7 @@ async def admin_blue_tick(user_id: str, body: AdminBlueTickBody, _=Depends(requi
     if not u:
         raise HTTPException(404, "User not found")
     reason = (body.reason or ("Approved by Glint admin" if body.verified else "Verification removed by Glint admin")).strip()
-    await set_manual_blue_tick(db, user_id, body.verified, reason)
+    await set_manual_blue_tick(db, user_id, body.verified, reason, body.duration_days)
     await db.users.update_one({"id": user_id}, {"$set": {"manual_verification_badge": "blue" if body.verified else None, "golden_tick": body.verified, "blue_tick_manual": body.verified, "blue_source": "admin_manual" if body.verified else None}})
     if body.verified:
         notice = f"Your account has been granted the Glint Blue Tick. Reason: {reason}"

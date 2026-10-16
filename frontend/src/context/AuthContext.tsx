@@ -1,9 +1,11 @@
 import {queryClient} from "@/src/query-client";
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { AppState } from "react-native";
 import { api, setToken, getToken, setRestrictedToken } from "@/src/api/client";
 
 export type User = {
   verification_badge?: string;
+  manual_badge_expires_at?: string | null;
   id: string;
   full_name: string;
   username: string;
@@ -62,6 +64,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     })();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!user?.id || !user.manual_badge_expires_at) return;
+    const delay = Date.parse(user.manual_badge_expires_at) - Date.now();
+    if (!Number.isFinite(delay)) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const syncExpiry = async () => {
+      try {
+        const me = await api.get("/users/me");
+        if (!cancelled) {
+          setUserState(me);
+          await queryClient.invalidateQueries();
+        }
+      } catch {
+        if (!cancelled) {
+          await queryClient.invalidateQueries({ queryKey: ["blue-entitlements"] });
+          timer = setTimeout(syncExpiry, 30_000);
+        }
+      }
+    };
+    const schedule = () => {
+      const remaining = Date.parse(user.manual_badge_expires_at!) - Date.now();
+      if (remaining > 2147483547) {
+        timer = setTimeout(schedule, 2147483547);
+      } else {
+        timer = setTimeout(syncExpiry, Math.max(0, remaining) + 100);
+      }
+    };
+    schedule();
+    const listener = AppState.addEventListener("change", state => {
+      if (state === "active" && Date.parse(user.manual_badge_expires_at!) <= Date.now()) {
+        clearTimeout(timer);
+        void syncExpiry();
+      }
+    });
+    return () => { cancelled = true; clearTimeout(timer); listener.remove(); };
+  }, [user?.id, user?.manual_badge_expires_at]);
 
   const loginWithToken = useCallback(async (token: string, u: User) => {
     await queryClient.cancelQueries();

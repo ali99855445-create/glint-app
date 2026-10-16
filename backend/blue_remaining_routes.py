@@ -1,10 +1,11 @@
 """Blue Tick support, protection, manual grants and profile-change review."""
 from fastapi import Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from bson import ObjectId
 from bson.errors import InvalidId
 from blue_tick import resolve_blue_entitlements
+from verification_badges import manual_badge_update
 
 class SupportBody(BaseModel):
     subject: str
@@ -13,6 +14,7 @@ class ImpersonationBody(BaseModel):
     reported_user_id: str
     details: Optional[str]=None
 class ManualBlueBody(BaseModel):
+    duration_days: Optional[int] = Field(default=None, ge=1, le=36500, strict=True)
     user_id: str
     enabled: bool
 class ReviewBody(BaseModel):
@@ -50,11 +52,8 @@ def install_blue_remaining_routes(api,db,get_current_user,now_iso):
         if not target: raise HTTPException(404,"User not found")
         # Blue is now independent from the retired Golden badge. Keep both
         # explicit Blue admin fields synchronized for old/new admin clients.
-        update={
-            "blue_tick_manual":body.enabled,
-            "blue_manual_grant":body.enabled,
-            "blue_manual_updated_at":now_iso(),
-        }
+        update=manual_badge_update('blue' if body.enabled else None, body.duration_days)
+        update['blue_manual_updated_at']=now_iso()
         await db.users.update_one({"id":body.user_id},{"$set":update})
         fresh=await db.users.find_one({"id":body.user_id})
         ent=resolve_blue_entitlements(fresh or {})

@@ -14,24 +14,10 @@ from blue_remaining_routes import install_blue_remaining_routes
 # Keep `verified` only as a compatibility alias for older clients, but derive it
 # exclusively from the canonical Blue entitlement. New clients should consume
 # `blue_tick_active` directly.
+_canonical_public_user = _server.public_user
+
 def _public_user_blue(u: dict) -> dict:
-    if not u:
-        return None
-    blue = blue_tick_active(u)
-    return {
-        "id": u["id"],
-        "full_name": u.get("full_name"),
-        "username": u.get("username"),
-        "avatar": u.get("avatar"),
-        "cover": u.get("cover"),
-        "bio": u.get("bio"),
-        "location": u.get("location"),
-        "blue_tick_active": blue,
-        "external_links": u.get("external_links", []) if blue else [],
-        "verified": blue,
-        "privacy": u.get("privacy", "public"),
-        "created_at": u.get("created_at"),
-    }
+    return _canonical_public_user(u)
 
 _server.public_user = _public_user_blue
 

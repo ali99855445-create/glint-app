@@ -14,6 +14,7 @@ export function useBlueEntitlements() {
     enabled: Boolean(user?.id),
     queryFn: getMyBlueEntitlements,
     staleTime: 30_000,
+    refetchInterval: 30_000,
     refetchOnMount: true,
     refetchOnReconnect: true,
   });
