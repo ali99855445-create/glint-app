@@ -25,9 +25,8 @@ def _parse_iso(value: Optional[str]):
 
 
 def _manual_blue(user: dict) -> bool:
-    # Only explicit Blue admin fields count. golden_tick is a retired legacy
-    # field and must never unlock the new paid Blue product or its benefits.
-    return bool(user.get("blue_tick_manual") or user.get("blue_manual_grant") or user.get("manual_verification_badge") in {"blue", "golden", "green", "silver", "business"})
+    from verification_badges import manual_badge
+    return manual_badge(user) is not None
 
 
 def _subscription_blue(user: dict) -> bool:
