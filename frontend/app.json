@@ -2,8 +2,8 @@
   "expo": {
     "name": "Glint",
     "slug": "glint-app",
-    "version": "1.0.20",
-    "orientation": "portrait",
+    "version": "1.0.21",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "glint",
     "userInterfaceStyle": "light",
@@ -31,7 +31,7 @@
         "READ_EXTERNAL_STORAGE",
         "CAMERA"
       ],
-      "versionCode": 20,
+      "versionCode": 21,
       "intentFilters": [
         {
           "action": "VIEW",
@@ -110,7 +110,8 @@
           "microphonePermission": "Record audio with your live selfie video",
           "recordAudioAndroid": true
         }
-      ]
+      ],
+      "./plugins/with-play-quality"
     ],
     "experiments": {
       "typedRoutes": true
