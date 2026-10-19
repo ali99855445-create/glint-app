@@ -1,5 +1,5 @@
 import { LiveSelfieCapture } from "@/src/components/LiveSelfieCapture";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { View, Text, Pressable, Platform } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { Image } from "expo-image";
@@ -18,6 +18,7 @@ import { pickAndUploadImage } from "@/src/lib/media";
 
 import { IdentityVideo } from "@/src/components/IdentityVideo";
 import { useIAP, getAvailablePurchases } from "expo-iap";
+import { reconcileBluePurchase, createBillingErrorReporter } from "@/src/lib/blue-billing";
 
 const BLUE_BENEFITS=[
   ["checkmark-circle","Blue badge everywhere","Your Blue Tick appears across supported Glint surfaces."],
@@ -34,20 +35,23 @@ export default function Verification() {
   useFocusEffect(React.useCallback(()=>{status.refetch();},[]));
   const [buying,setBuying]=useState(false);
   const billing=useQuery({queryKey:["blue-billing-config",user?.id],queryFn:()=>api.get("/blue/billing-config")});
+  const paymentBusy=useRef(false);
+  const reportBillingError=useRef(createBillingErrorReporter(message=>toast.show(message,"error"))).current;
   const iap=useIAP({
     onPurchaseSuccess: async purchase => {
       if(purchase.productId!==billing.data?.product_id)return;
       try {
+        if(purchase.purchaseState === "pending"){toast.show("Your Google Play payment is pending.","error");return;}
         if(!purchase.purchaseToken)throw new Error("Google Play did not return a purchase token");
         await api.post("/blue/purchases/verify",{purchase_token:purchase.purchaseToken});
         await iap.finishTransaction({purchase,isConsumable:false});
         const refreshed=await status.refetch();
         await refresh();
         toast.show(refreshed.data?.blue_active?"Your Blue subscription is active.":"Payment confirmed. Complete your identity review.","success");
-      }catch(e:any){toast.show(e.message||"Could not verify purchase. Restore to retry.","error");}
-      finally{setBuying(false);}
+      }catch(e:any){reportBillingError(e);}
+      finally{paymentBusy.current=false;setBuying(false);}
     },
-    onPurchaseError: error => {setBuying(false);toast.show(error.message||"Purchase cancelled","error");},
+    onPurchaseError: error => {paymentBusy.current=false;setBuying(false);reportBillingError(error);},
   });
   useEffect(()=>{if(iap.connected&&billing.data?.product_id)iap.fetchProducts({skus:[billing.data.product_id],type:"subs"}).catch(()=>toast.show("Subscription is not available in Google Play yet","error"));},[iap.connected,billing.data?.product_id]);
   const [legalName,setLegalName]=useState(""); const [note,setNote]=useState(""); const [doc,setDoc]=useState<string|null>(null); const [selfie,setSelfie]=useState<string|null>(null); const [submitting,setSubmitting]=useState(false);
@@ -66,21 +70,42 @@ export default function Verification() {
 
   async function uploadDoc(){try{const r=await pickAndUploadImage({quality:.75});if(r?.denied)return toast.show("Photo permission needed","error");if(r?.url)setDoc(r.url);}catch(e:any){toast.show(e.message||"Upload failed","error")}}
   function captureSelfie(){setCaptureVisible(true)}
+  async function restoreExistingPurchase(productId: string){
+    return reconcileBluePurchase(productId,getAvailablePurchases,async purchase=>{
+      await api.post("/blue/purchases/verify",{purchase_token:purchase.purchaseToken});
+      await iap.finishTransaction({purchase,isConsumable:false});
+      await status.refetch();
+      await refresh();
+    });
+  }
   async function continueToPayment(){
-    if(!billing.data?.checkout_ready)return toast.show("Payments are not available yet. Please try again later.","error");
+    if(paymentBusy.current)return;
     if(Platform.OS!=="android")return toast.show("Subscribe through the Glint Android app on Google Play","error");
     if(!iap.connected||!product||!billing.data)return toast.show("Subscription is not available in Google Play yet","error");
-    const fresh=await billing.refetch();
-    const offer=(fresh.data?.intro_eligible?offers.find(o=>o.id===fresh.data?.intro_offer_id):undefined)||baseOffer;
-    if(!offer?.offerTokenAndroid)return toast.show("Monthly subscription plan is not available yet","error");
-    setBuying(true);
-    try{await iap.requestPurchase({type:"subs",request:{google:{skus:[product.id],subscriptionOffers:[{sku:product.id,offerToken:offer.offerTokenAndroid}],obfuscatedAccountId:billing.data.account_id}}});}
-    catch(e:any){setBuying(false);toast.show(e.message||"Unable to open Google Play payment","error");}
+    paymentBusy.current=true;setBuying(true);
+    try{
+      const fresh=await billing.refetch();
+      if(fresh.error)throw fresh.error;
+      if(!fresh.data?.checkout_ready)throw new Error("Payments are not available yet. Please try again later.");
+      // Includes cancelled subscriptions until their paid period expires.
+      if(await restoreExistingPurchase(fresh.data.product_id)){
+        toast.show("Existing subscription restored. No new payment was taken.","success");
+        paymentBusy.current=false;setBuying(false);return;
+      }
+      const offer=(fresh.data.intro_eligible?offers.find(o=>o.id===fresh.data.intro_offer_id):undefined)||baseOffer;
+      if(!offer?.offerTokenAndroid)throw new Error("Monthly subscription plan is not available yet. Reopen this screen to refresh Google Play pricing.");
+      if(!fresh.data.account_id)throw new Error("Could not identify your Glint account. Reopen this screen and try again.");
+      await iap.requestPurchase({type:"subs",request:{google:{skus:[fresh.data.product_id],subscriptionOffers:[{sku:fresh.data.product_id,offerToken:offer.offerTokenAndroid}],obfuscatedAccountId:fresh.data.account_id}}});
+    }catch(e:any){paymentBusy.current=false;setBuying(false);reportBillingError(e);}
   }
   async function restorePayment(){
-    setBuying(true);
-    try{const purchases=await getAvailablePurchases();for(const purchase of purchases){if(purchase.productId===billing.data?.product_id&&purchase.purchaseToken){await api.post("/blue/purchases/verify",{purchase_token:purchase.purchaseToken});await iap.finishTransaction({purchase,isConsumable:false});await status.refetch();await refresh();toast.show("Subscription restored","success");return;}}toast.show("No active Glint Blue subscription found","error");}
-    catch(e:any){toast.show(e.message||"Could not restore subscription","error");}finally{setBuying(false);}
+    if(paymentBusy.current||!iap.connected)return;
+    paymentBusy.current=true;setBuying(true);
+    try{
+      if(!billing.data?.product_id)throw new Error("Subscription details are not ready. Please try again.");
+      const restored=await restoreExistingPurchase(billing.data.product_id);
+      toast.show(restored?"Subscription restored":"No active Glint Blue subscription found",restored?"success":"error");
+    }catch(e:any){reportBillingError(e);}finally{paymentBusy.current=false;setBuying(false);}
   }
   async function submit(){if(!legalName.trim())return toast.show("Enter your full legal name","error");if(legalName.trim().toLocaleLowerCase().replace(/\s+/g," ")!==(user?.full_name||"").trim().toLocaleLowerCase().replace(/\s+/g," "))return toast.show("Your profile name must match the full name on your ID","error");if(!doc)return toast.show("Upload an ID document","error");if(!selfie)return toast.show("Record a live selfie video","error");setSubmitting(true);try{await api.post("/verification",{document:doc,selfie,full_legal_name:legalName.trim(),note:note.trim()||null});toast.show("Your request is under review by the Glint Team. We aim to notify you within 24–48 hours.","success");status.refetch();}catch(e:any){toast.show(e.message,"error");}finally{setSubmitting(false)}}
   const StatusBanner=()=>{if(current==="pending")return <Banner icon="hourglass-outline" color={colors.warning} title="Under review" text="Your request is under review by the Glint Team. We aim to review your document and live selfie video and notify you of the outcome within 24–48 hours."/>;if(current==="approved"&&!status.data?.blue_active)return <Banner icon="refresh-circle" color={colors.warning} title="Subscription inactive" text="Renew or restore your subscription to reactivate your approved Blue Tick."/>;if(current==="approved")return <Banner icon="checkmark-circle" color="#1877F2" title="You're verified!" text="Your Blue Tick and Blue benefits are active."/>;if(current==="rejected")return <Banner icon="close-circle" color={colors.error} title="Request declined" text="Your last verification request was declined."/>;return null};

@@ -43,6 +43,9 @@ jobs:
         working-directory: frontend
         run: npm install --legacy-peer-deps
 
+      - name: Check billing ownership and checkout regressions
+        run: node --experimental-strip-types --test frontend/tests/blue-billing.test.mjs
+
       - name: Check TypeScript
         working-directory: frontend
         run: npx tsc --noEmit
