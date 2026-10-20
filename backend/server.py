@@ -2881,11 +2881,8 @@ async def submit_verification(body: VerificationSubmit, me=Depends(get_current_u
 @api.get("/verification/me")
 async def my_verification(me=Depends(get_current_user)):
     v = await db.verifications.find_one({"user_id": me["id"]}, {"_id": 0}, sort=[("created_at", -1)])
-    payload = v or {"status": "none"}
-    payload["eligibility"] = verification_eligibility(me)
-    payload["blue_payment_confirmed"] = play_billing.payment_active(me)
-    payload["blue_active"] = play_billing.blue_active(me)
-    return payload
+    from verification_state import verification_payload
+    return verification_payload(me, v, verification_eligibility(me))
 
 
 class PlayPurchaseBody(BaseModel):
