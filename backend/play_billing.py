@@ -58,6 +58,9 @@ def verify_subscription(token, user_id):
 
 
 def payment_active(user, now=None):
+    from blue_pass import active_end
+    if active_end(user, now):
+        return True
     try:
         expiry = datetime.fromisoformat(user.get('blue_subscription_ends_at', '').replace('Z', '+00:00'))
         return user.get('blue_subscription_status') == 'active' and expiry > (now or datetime.now(timezone.utc))

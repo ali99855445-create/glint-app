@@ -39,12 +39,13 @@ export default function Verification() {
   const reportBillingError=useRef(createBillingErrorReporter(message=>toast.show(message,"error"))).current;
   const iap=useIAP({
     onPurchaseSuccess: async purchase => {
-      if(purchase.productId!==billing.data?.product_id)return;
+      const isPass=Boolean(billing.data?.pass_product_ids?.includes(purchase.productId));
+      if(purchase.productId!==billing.data?.product_id&&!isPass)return;
       try {
         if(purchase.purchaseState === "pending"){toast.show("Your Google Play payment is pending.","error");return;}
         if(!purchase.purchaseToken)throw new Error("Google Play did not return a purchase token");
-        await api.post("/blue/purchases/verify",{purchase_token:purchase.purchaseToken});
-        await iap.finishTransaction({purchase,isConsumable:false});
+        if(isPass){await api.post("/blue/passes/verify",{purchase_token:purchase.purchaseToken,product_id:purchase.productId});}
+        else{await api.post("/blue/purchases/verify",{purchase_token:purchase.purchaseToken});await iap.finishTransaction({purchase,isConsumable:false});}
         const refreshed=await status.refetch();
         await refresh();
         toast.show(refreshed.data?.blue_active?"Your Blue subscription is active.":"Payment confirmed. Complete your identity review.","success");
@@ -54,6 +55,12 @@ export default function Verification() {
     onPurchaseError: error => {paymentBusy.current=false;setBuying(false);reportBillingError(error);},
   });
   useEffect(()=>{if(iap.connected&&billing.data?.product_id)iap.fetchProducts({skus:[billing.data.product_id],type:"subs"}).catch(()=>toast.show("Subscription is not available in Google Play yet","error"));},[iap.connected,billing.data?.product_id]);
+  useEffect(()=>{if(iap.connected&&billing.data?.pass_enabled)iap.fetchProducts({skus:billing.data.pass_product_ids,type:"in-app"}).catch(()=>toast.show("Monthly passes are not available in Google Play yet","error"));},[iap.connected,billing.data?.pass_enabled]);
+  const passMode=Boolean(billing.data?.pass_enabled);
+  const regularPass=iap.products.find(p=>p.id==="glint_blue_month_pass");
+  const passProduct=iap.products.find(p=>p.id===billing.data?.pass_product_id);
+  const passOffer=passProduct?.platform==="android"?passProduct.discountOffers?.find(o=>!o.rentalDetailsAndroid&&!o.preorderDetailsAndroid):undefined;
+  const passDisplayPrice=passOffer?.displayPrice||passProduct?.displayPrice;
   const [legalName,setLegalName]=useState(""); const [note,setNote]=useState(""); const [doc,setDoc]=useState<string|null>(null); const [selfie,setSelfie]=useState<string|null>(null); const [submitting,setSubmitting]=useState(false);
   const current=status.data?.blue_active?"approved":status.data?.status;
   const product=iap.subscriptions.find(p=>p.id===billing.data?.product_id);
@@ -61,10 +68,10 @@ export default function Verification() {
   const baseOffer=offers.find(o=>!o.id || o.id==="monthly");
   const selectedOffer=(billing.data?.intro_eligible ? offers.find(o=>o.id===billing.data?.intro_offer_id) : undefined) || baseOffer;
   const phases=selectedOffer?.pricingPhasesAndroid?.pricingPhaseList||[];
-  const intro=selectedOffer?.id===billing.data?.intro_offer_id;
+  const intro=!passMode&&selectedOffer?.id===billing.data?.intro_offer_id;
   const regularPrice=phases[phases.length-1]?.formattedPrice || baseOffer?.displayPrice || product?.displayPrice;
   const firstPrice=phases[0]?.formattedPrice || selectedOffer?.displayPrice;
-  const price=intro&&firstPrice ? `${firstPrice} for first month` : regularPrice ? `${regularPrice}/month` : "Price available from Google Play";
+  const price=passMode ? `${passDisplayPrice||"Price available from Google Play"} for 1 month` : intro&&firstPrice ? `${firstPrice} for first month` : regularPrice ? `${regularPrice}/month` : "Price available from Google Play";
   const paymentConfirmed=Boolean(status.data?.blue_payment_confirmed||status.data?.payment_confirmed||status.data?.subscription_paid);
   const showIdentity=paymentConfirmed||Boolean(status.data?.blue_active);
 
@@ -78,12 +85,29 @@ export default function Verification() {
       await refresh();
     });
   }
+  async function buyMonthlyPass(){
+    if(!iap.connected||!passProduct)throw new Error("Monthly pass is not available yet. Please try again later.");
+    const fresh=await billing.refetch();
+    if(fresh.error)throw fresh.error;
+    if(!fresh.data?.pass_enabled||!fresh.data.checkout_ready)throw new Error("Monthly passes are not available yet.");
+    if(fresh.data.pass_product_id!==passProduct.id)throw new Error("Your price changed. Check the updated price and tap Continue again.");
+    const owned=await getAvailablePurchases();
+    for(const purchase of owned.filter(p=>fresh.data.pass_product_ids.includes(p.productId))){
+      if(purchase.purchaseState==='pending')throw new Error("A Blue pass payment is pending in Google Play.");
+      await api.post("/blue/passes/verify",{purchase_token:purchase.purchaseToken,product_id:purchase.productId});
+      await status.refetch();await refresh();
+      toast.show("Previous payment recovered. No new payment was taken.","success");
+      paymentBusy.current=false;setBuying(false);return;
+    }
+    await iap.requestPurchase({type:"in-app",request:{google:{skus:[passProduct.id],offerToken:passOffer?.offerTokenAndroid,obfuscatedAccountId:fresh.data.account_id}}});
+  }
   async function continueToPayment(){
     if(paymentBusy.current)return;
     if(Platform.OS!=="android")return toast.show("Subscribe through the Glint Android app on Google Play","error");
-    if(!iap.connected||!product||!billing.data)return toast.show("Subscription is not available in Google Play yet","error");
+    if(!iap.connected||(!passMode&&!product)||!billing.data)return toast.show("Subscription is not available in Google Play yet","error");
     paymentBusy.current=true;setBuying(true);
     try{
+      if(passMode){await buyMonthlyPass();return;}
       const fresh=await billing.refetch();
       if(fresh.error)throw fresh.error;
       if(!fresh.data?.checkout_ready)throw new Error("Payments are not available yet. Please try again later.");
@@ -102,6 +126,15 @@ export default function Verification() {
     if(paymentBusy.current||!iap.connected)return;
     paymentBusy.current=true;setBuying(true);
     try{
+      if(passMode){
+        const owned=await getAvailablePurchases();
+        for(const purchase of owned.filter(p=>billing.data.pass_product_ids.includes(p.productId))){
+          if(purchase.purchaseState==='pending')throw new Error("Your payment is pending in Google Play.");
+          await api.post("/blue/passes/verify",{purchase_token:purchase.purchaseToken,product_id:purchase.productId});
+        }
+        const result=await status.refetch();await refresh();
+        toast.show(result.data?.blue_payment_confirmed?"Your paid access is synced":"No current monthly pass found for this Glint account",result.data?.blue_payment_confirmed?"success":"error");return;
+      }
       if(!billing.data?.product_id)throw new Error("Subscription details are not ready. Please try again.");
       const restored=await restoreExistingPurchase(billing.data.product_id);
       toast.show(restored?"Subscription restored":"No active Glint Blue subscription found",restored?"success":"error");
@@ -113,7 +146,10 @@ export default function Verification() {
   return <View style={[styles.root,{paddingTop:insets.top}]}><LiveSelfieCapture visible={captureVisible} onClose={()=>setCaptureVisible(false)} onComplete={setSelfie}/><View style={styles.header}><Pressable onPress={()=>router.back()} style={styles.iconBtn}><Icon name="chevron-back" size={26} color={colors.onSurface}/></Pressable><Text style={styles.title}>Blue Verification</Text><View style={{width:40}}/></View><KeyboardAwareScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" bottomOffset={20}>
     <View style={styles.hero}><View style={styles.profilePreview}><Avatar uri={user?.avatar} name={user?.full_name} size={72}/><View style={{alignItems:"center"}}><View style={styles.nameRow}><Text style={styles.profileName}>{user?.full_name||"Your profile"}</Text><BlueTick size={21}/></View><Text style={styles.previewLabel}>Preview of your Blue Tick</Text></View></View><Text style={styles.heroTitle}>Unlock Blue benefits</Text><Text style={styles.heroText}>Subscribe, confirm your identity, and get access after your verification is approved.</Text></View>
     <StatusBanner/>
-    {!showIdentity&&<><View style={styles.planCard}><View style={styles.planTop}><View><Text style={styles.planName}>Glint Blue</Text><Text style={styles.price}>{price}</Text>{intro&&<Text style={styles.small}>90% off your first month · then {regularPrice}/month. Once per Glint account.</Text>}</View><View style={styles.monthlyPill}><Text style={styles.monthlyText}>Monthly</Text></View></View><Text style={styles.small}>Subscription does not guarantee verification. Your identity must be approved before the Blue Tick and benefits activate.</Text></View><View style={styles.benefitsCard}><Text style={styles.cardTitle}>Your 5 Blue benefits</Text>{BLUE_BENEFITS.map(([icon,title,text])=><View style={styles.benefit} key={title}><View style={styles.benefitIcon}><Icon name={icon as any} size={20} color={colors.brand}/></View><View style={{flex:1}}><Text style={styles.benefitTitle}>{title}</Text><Text style={styles.benefitText}>{text}</Text></View></View>)}</View><Button title={`Continue · ${price}`} onPress={continueToPayment} testID="blue-continue-payment" loading={buying} disabled={!selectedOffer||!billing.data?.checkout_ready}/>{!billing.data?.checkout_ready&&<Text style={styles.small}>Payments are being set up. Pricing is shown for reference.</Text>}<Button title="Restore purchase" variant="ghost" onPress={restorePayment} disabled={!iap.connected||buying}/><Text style={styles.legal}>Payment is processed through Google Play. Your subscription renews monthly until cancelled in Google Play. After successful payment, you will submit your ID and live selfie for review.</Text></>}
+    {passMode&&billing.data?.intro_eligible&&<Text style={styles.small}>First purchase: {passDisplayPrice||"See Google Play"}. Future one-month passes: {regularPass?.displayPrice||"See Google Play at renewal"}. Each renewal requires a separate payment.</Text>}
+    {passMode&&<><Text style={styles.small}>Monthly access for this Glint account only. No automatic renewal. Each payment adds one calendar month; paid Blue benefits end when access expires. Identity approval is required.</Text>{showIdentity&&<Button title={`Extend access · ${price}`} onPress={continueToPayment} loading={buying} disabled={!passProduct||!billing.data?.checkout_ready}/>}</>}
+
+    {!showIdentity&&<><View style={styles.planCard}><View style={styles.planTop}><View><Text style={styles.planName}>Glint Blue</Text><Text style={styles.price}>{price}</Text>{intro&&<Text style={styles.small}>90% off your first month · then {regularPrice}/month. Once per Glint account.</Text>}</View><View style={styles.monthlyPill}><Text style={styles.monthlyText}>Monthly</Text></View></View><Text style={styles.small}>Subscription does not guarantee verification. Your identity must be approved before the Blue Tick and benefits activate.</Text></View><View style={styles.benefitsCard}><Text style={styles.cardTitle}>Your 5 Blue benefits</Text>{BLUE_BENEFITS.map(([icon,title,text])=><View style={styles.benefit} key={title}><View style={styles.benefitIcon}><Icon name={icon as any} size={20} color={colors.brand}/></View><View style={{flex:1}}><Text style={styles.benefitTitle}>{title}</Text><Text style={styles.benefitText}>{text}</Text></View></View>)}</View><Button title={`Continue · ${price}`} onPress={continueToPayment} testID="blue-continue-payment" loading={buying} disabled={(passMode?!passProduct:!selectedOffer)||!billing.data?.checkout_ready}/>{!billing.data?.checkout_ready&&<Text style={styles.small}>Payments are being set up. Pricing is shown for reference.</Text>}<Button title="Restore purchase" variant="ghost" onPress={restorePayment} disabled={!iap.connected||buying}/><Text style={styles.legal}>Payment is processed through Google Play. Existing recurring subscriptions renew until cancelled in Google Play. Monthly passes do not renew automatically; pay again to extend access by one calendar month. After successful payment, you will submit your ID and live selfie for review.</Text></>}
     {showIdentity&&<><View style={styles.rulesCard}><Text style={styles.cardTitle}>Identity verification</Text><Rule ok={!!legalName.trim()&&legalName.trim().toLocaleLowerCase()===(user?.full_name||"").trim().toLocaleLowerCase()} text="Profile name matches your ID document"/><Rule ok={!!doc} text="Government ID or official document"/><Rule ok={!!selfie} text="Live selfie video recorded in the app"/></View>{current!=="pending"&&current!=="approved"&&<><Text style={styles.small}>Your profile name must match the name on your genuine ID document. The Glint Team will check your document and live selfie video.</Text><Field value={legalName} onChangeText={setLegalName} placeholder="Full legal name" icon={<Icon name="person-outline" size={20} color={colors.muted}/>}/><Pressable style={styles.uploadCard} onPress={uploadDoc}>{doc?<Image source={{uri:fileUrl(doc)}} style={styles.uploadImage} contentFit="cover"/>:<><Icon name="document-text-outline" size={34} color={colors.brand}/><Text style={styles.uploadTitle}>Upload ID document</Text><Text style={styles.uploadSub}>Use a genuine, unaltered identity document belonging to you.</Text></>}</Pressable><Pressable style={styles.uploadCard} onPress={captureSelfie}>{selfie?<Text style={styles.uploadTitle}>Live selfie video recorded ✓ · Tap to record again</Text>:<><Icon name="camera-outline" size={34} color={colors.brand}/><Text style={styles.uploadTitle}>Record live selfie video</Text><Text style={styles.uploadSub}>Record 2–15 seconds: show your face clearly and slowly turn your head.</Text></>}</Pressable>{selfie&&<IdentityVideo url={selfie}/>}<Field value={note} onChangeText={setNote} placeholder="Anything we should know? (optional)" multiline/><Button title="Submit for review" onPress={submit} loading={submitting}/><Text style={styles.legal}>Fake, forged, impersonation or AI-generated identity documents are prohibited. Repeated fraudulent submissions may restrict future verification applications.</Text></>}</>}
   </KeyboardAwareScrollView></View>;
 }

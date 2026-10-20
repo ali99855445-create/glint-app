@@ -32,6 +32,7 @@ import bcrypt
 
 import storage_helper
 import play_billing
+import blue_pass
 from blue_profile_policy import normal_name_change_allowed
 from blue_tick_admin import set_manual_blue_tick
 from verification_badges import BADGES, display_badge, manual_badge, configured_manual_badge, manual_badge_update
@@ -435,6 +436,8 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
             user.update(fields)
             if fields["blue_subscription_status"] != "unavailable":
                 await db.users.update_one({"id": user["id"]}, {"$set": fields})
+    if user.get("blue_pass_grants"):
+        user = await blue_pass.refresh_grants(db, user)
     return user
 
 
@@ -2891,7 +2894,7 @@ class PlayPurchaseBody(BaseModel):
 
 @api.get("/blue/billing-config")
 async def blue_billing_config(me=Depends(get_current_user)):
-    return {"product_id": play_billing.PRODUCT_ID, "checkout_ready": bool(os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()), "account_id": play_billing.account_id(me["id"]), "intro_offer_id": play_billing.INTRO_OFFER_ID, "intro_eligible": play_billing.intro_eligible(me), "base_plan_id": "monthly"}
+    return {"pass_enabled": blue_pass.enabled(), "pass_product_id": blue_pass.INTRO_PASS_ID if play_billing.intro_eligible(me) else blue_pass.PASS_ID, "pass_product_ids": sorted(blue_pass.PASS_IDS), "product_id": play_billing.PRODUCT_ID, "checkout_ready": bool(os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()), "account_id": play_billing.account_id(me["id"]), "intro_offer_id": play_billing.INTRO_OFFER_ID, "intro_eligible": play_billing.intro_eligible(me), "base_plan_id": "monthly"}
 
 
 @api.post("/blue/purchases/verify")
@@ -2921,7 +2924,7 @@ async def blue_entitlements(me=Depends(get_current_user)):
     return {"ok": True, "blue": resolve_blue_entitlements(me), "manual_badge": {
         "badge": manual_badge(me), "expires_at": me.get("manual_badge_expires_at"),
     }, "subscription": {"status": "active" if play_billing.payment_active(me) else "inactive",
-        "ends_at": me.get("blue_subscription_ends_at"), "auto_renew": bool(me.get("blue_subscription_auto_renew"))}}
+        "pass_ends_at": blue_pass.active_end(me).isoformat() if blue_pass.active_end(me) else None, "ends_at": me.get("blue_subscription_ends_at"), "auto_renew": bool(me.get("blue_subscription_auto_renew"))}}
 
 
 class ExternalLink(BaseModel):
@@ -4921,6 +4924,7 @@ async def privacy_people(kind:str=Query(...),me=Depends(get_current_user)):
     people={u['id']:u async for u in db.users.find({'id':{'$in':ids},'deleted_at':None,'suspended':{'$ne':True},'deactivated':{'$ne':True}},{'_id':0,'id':1,'full_name':1,'username':1})}
     return [{'id':uid,'name':people.get(uid,{}).get('full_name'),'username':people.get(uid,{}).get('username')} for uid in ids]
 
+blue_pass.install_routes(api, db, get_current_user)
 app.include_router(api)
 
 app.add_middleware(
