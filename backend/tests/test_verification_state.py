@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from verification_state import verification_payload
+from verification_state import verification_payload, purchase_allowed
 
 
 class VerificationStateTests(unittest.TestCase):
@@ -32,3 +32,21 @@ class VerificationStateTests(unittest.TestCase):
         result = verification_payload({'blue_identity_approved': True}, {'status': 'approved'})
         self.assertFalse(result['blue_payment_confirmed'])
         self.assertEqual(result['status'], 'approved')
+
+    def test_paid_pending_and_approved_accounts_cannot_checkout_again(self):
+        for approved in (False, True):
+            user = {**self.paid(), 'blue_identity_approved': approved}
+            self.assertFalse(purchase_allowed(user))
+            self.assertTrue(purchase_allowed({}))
+
+    def test_cancelled_renewal_still_blocks_until_paid_expiry(self):
+        now = datetime.now(timezone.utc)
+        user = {'blue_subscription_status': 'active', 'blue_subscription_auto_renew': False,
+                'blue_subscription_ends_at': (now + timedelta(days=1)).isoformat()}
+        self.assertFalse(purchase_allowed(user))
+        user['blue_subscription_ends_at'] = (now - timedelta(seconds=1)).isoformat()
+        self.assertTrue(purchase_allowed(user))
+
+    def test_separate_unpaid_account_remains_able_to_buy(self):
+        self.assertFalse(purchase_allowed(self.paid()))
+        self.assertTrue(purchase_allowed({'id': 'another-account'}))

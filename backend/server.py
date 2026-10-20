@@ -2891,7 +2891,8 @@ class PlayPurchaseBody(BaseModel):
 
 @api.get("/blue/billing-config")
 async def blue_billing_config(me=Depends(get_current_user)):
-    return {"pass_enabled": blue_pass.enabled(), "pass_product_id": blue_pass.INTRO_PASS_ID if play_billing.intro_eligible(me) else blue_pass.PASS_ID, "pass_product_ids": sorted(blue_pass.PASS_IDS), "product_id": play_billing.PRODUCT_ID, "checkout_ready": bool(os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()), "account_id": play_billing.account_id(me["id"]), "intro_offer_id": play_billing.INTRO_OFFER_ID, "intro_eligible": play_billing.intro_eligible(me), "base_plan_id": "monthly"}
+    from verification_state import purchase_allowed
+    return {"pass_enabled": blue_pass.enabled(), "pass_product_id": blue_pass.INTRO_PASS_ID if play_billing.intro_eligible(me) else blue_pass.PASS_ID, "pass_product_ids": sorted(blue_pass.PASS_IDS), "product_id": play_billing.PRODUCT_ID, "checkout_ready": bool(os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()) and purchase_allowed(me), "purchase_allowed": purchase_allowed(me), "account_id": play_billing.account_id(me["id"]), "intro_offer_id": play_billing.INTRO_OFFER_ID, "intro_eligible": play_billing.intro_eligible(me), "base_plan_id": "monthly"}
 
 
 @api.post("/blue/purchases/verify")

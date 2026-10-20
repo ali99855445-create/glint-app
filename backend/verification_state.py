@@ -13,5 +13,13 @@ def verification_payload(user, application=None, eligibility=None):
     payload['eligibility'] = eligibility or {}
     payload['blue_identity_approved'] = identity_approved
     payload['blue_payment_confirmed'] = play_billing.payment_active(user)
+    from blue_pass import active_end
+    pass_end = active_end(user)
+    payload['paid_until'] = pass_end.isoformat() if pass_end else user.get('blue_subscription_ends_at')
     payload['blue_active'] = active
     return payload
+
+
+def purchase_allowed(user):
+    """A paid period must expire before another checkout for this account."""
+    return not play_billing.payment_active(user)
