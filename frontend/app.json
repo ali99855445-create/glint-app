@@ -2,7 +2,7 @@
   "expo": {
     "name": "Glint",
     "slug": "glint-app",
-    "version": "1.0.24",
+    "version": "1.0.25",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "glint",
@@ -31,7 +31,7 @@
         "READ_EXTERNAL_STORAGE",
         "CAMERA"
       ],
-      "versionCode": 24,
+      "versionCode": 25,
       "intentFilters": [
         {
           "action": "VIEW",

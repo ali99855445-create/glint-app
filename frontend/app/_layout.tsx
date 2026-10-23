@@ -1,3 +1,4 @@
+import {LiveUpdates} from "@/src/components/LiveUpdates";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { LogBox, View, ActivityIndicator } from "react-native";
@@ -33,6 +34,7 @@ export default function RootLayout() {
                   <AuthProvider>
                     <ToastProvider>
                       <ThemedStatusBar />
+                      <LiveUpdates />
                       <Stack screenOptions={{ headerShown: false, animation: "slide_from_right", contentStyle: { backgroundColor: "#FFFFFF" } }}>
                         <Stack.Screen name="story/[userId]" options={{ animation: "fade", presentation: "fullScreenModal" }} />
                       </Stack>

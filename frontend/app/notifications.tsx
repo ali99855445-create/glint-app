@@ -1,3 +1,4 @@
+import {notificationRoute} from "@/src/lib/notification-route";
 import React from "react";
 import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl } from "react-native";
 import { useRouter, useFocusEffect, usePathname } from "expo-router";
@@ -26,7 +27,7 @@ export default function Notifications() {
   const inTab=usePathname().endsWith("notifications-tab");
   const qc = useQueryClient();
 
-  const notifs = useQuery({ queryKey: ["notifications"], queryFn: () => api.get("/notifications") });
+  const notifs = useQuery({ queryKey: ["notifications"], queryFn: () => api.get("/notifications"), refetchInterval:10000 });
 
   const readAll = useMutation({
     mutationFn: () => api.post("/notifications/read-all"),
@@ -36,28 +37,13 @@ export default function Notifications() {
     },
   });
 
-  useFocusEffect(
-    React.useCallback(() => {
-      const t = setTimeout(() => readAll.mutate(), 1200);
-      return () => clearTimeout(t);
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
-  );
-
-  function open(n: any) {
-    switch (n.type) {
-      case "reaction":
-      case "comment":
-      case "spark":
-        if (n.ref_id) return router.push(`/post/${n.ref_id}`);
-        break;
-      case "friend_request":
-        return router.push("/(tabs)/friends");
-      case "friend_accept":
-        return n.actor?.username ? router.push(`/user/${n.actor.username}`) : router.push("/(tabs)/friends");
-      case "message":
-        return router.push(`/chat/${n.ref_id}`);
+  useFocusEffect(React.useCallback(()=>{notifs.refetch();},[]));
+  function open(n:any){
+    if(!n.read){
+      qc.setQueryData(["notifications"],(rows:any)=>(rows||[]).map((v:any)=>v.id===n.id?{...v,read:true}:v));
+      api.post(`/notifications/${n.id}/read`).then(()=>qc.invalidateQueries({queryKey:["unread-count"]})).catch(()=>{notifs.refetch();});
     }
+    router.push(notificationRoute(n) as any);
   }
 
   return (
@@ -67,9 +53,10 @@ export default function Notifications() {
           <Icon name="chevron-back" size={26} color={colors.onSurface} />
         </Pressable>
         <Text style={styles.title}>Activity</Text>
-        <View style={{ width: 40 }} />
+        <Pressable accessibilityLabel="Mark all notifications read" onPress={()=>readAll.mutate()}><Icon name="checkmark-done" size={24} color={colors.brand}/></Pressable>
       </View>
 
+      {notifs.isError&&<Pressable onPress={()=>notifs.refetch()} style={{padding:16}}><Text style={{color:colors.error}}>Could not load notifications. Tap to retry.</Text></Pressable>}
       {notifs.isLoading ? (
         <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
       ) : (
@@ -78,12 +65,12 @@ export default function Notifications() {
           keyExtractor={(n) => n.id}
           refreshControl={<RefreshControl refreshing={notifs.isRefetching} onRefresh={() => notifs.refetch()} tintColor={colors.brandPrimary} />}
           renderItem={({ item }) => {
-            const meta = TYPE_ICON[item.type] || TYPE_ICON.message;
+            const meta = TYPE_ICON[item.type] || {icon:item.type==="admin"?"shield-checkmark":item.type?.startsWith("community")?"people":"notifications",colorKey:"brand"};
             const tint = (colors as any)[meta.colorKey];
             return (
               <Pressable style={[styles.row, !item.read && styles.rowUnread]} onPress={() => open(item)} testID={`notif-${item.id}`}>
                 <View>
-                  <Avatar uri={item.actor?.avatar} name={item.actor?.full_name} size={48} />
+                  {item.actor?<Avatar uri={item.actor.avatar} name={item.actor.full_name||"Glint member"} size={48}/>:<View style={{width:48,height:48,borderRadius:24,backgroundColor:colors.brandTertiary,alignItems:"center",justifyContent:"center"}}><Icon name={item.type==="admin"?"shield-checkmark":"notifications"} size={25} color={colors.brand}/></View>}
                   <View style={[styles.typeBadge, { backgroundColor: tint }]}>
                     <Icon name={meta.icon} size={12} color="#FFFFFF" />
                   </View>

@@ -1,3 +1,4 @@
+import {resolveFileUrl} from "@/src/lib/file-url";
 import {queryClient} from "@/src/query-client";
 import { router } from "expo-router";
 import { Platform } from "react-native";
@@ -126,9 +127,7 @@ export async function uploadFile(uri: string, name = "upload.jpg", type = "image
 
 // Turn a stored /api/files path into a full URL (already absolute in our case)
 export function fileUrl(pathOrUrl: string | null | undefined): string | undefined {
-  if (!pathOrUrl) return undefined;
-  if (pathOrUrl.startsWith("http")) return pathOrUrl;
-  return `${API}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+  return resolveFileUrl(API,pathOrUrl,cachedToken);
 }
 
 export const RESTRICTED_TOKEN_KEY="glint_restricted_token";

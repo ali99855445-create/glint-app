@@ -2,7 +2,7 @@ name: Build Glint Play AAB
 
 on:
   push:
-    branches: ["glint-final-upgrade"]
+    branches: ["glint-final-upgrade", "fix/blue-auto-renew-v25"]
   workflow_dispatch:
 
 concurrency:
@@ -33,11 +33,17 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Check monthly pass payments and account isolation
+      - name: Check recurring billing, legacy passes and account isolation
         run: |
-          pip install fastapi==0.110.1 httpx==0.27.2
+          pip install fastapi==0.110.1 httpx==0.27.2 motor==3.3.1 pymongo==4.6.3 python-dotenv pyjwt bcrypt python-multipart google-auth requests mongomock-motor
           python -m unittest discover -s backend/tests -p 'test_blue_pass*.py'
           python -m unittest discover -s backend/tests -p test_play_billing.py
+          python -m unittest discover -s backend/tests -p test_blue_release_api.py
+          python -m unittest discover -s backend/tests -p test_verification_state.py
+          python -m unittest discover -s backend/tests -p test_communities.py
+          python -m unittest discover -s backend/tests -p test_notifications_live.py
+          python -m unittest discover -s backend/tests -p test_messenger_settings.py
+          python -m unittest discover -s backend/tests -p test_v20_messenger.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -55,7 +61,7 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Check billing ownership and checkout regressions
-        run: node --experimental-strip-types --test frontend/tests/blue-billing.test.mjs
+        run: node --experimental-strip-types --test frontend/tests/blue-billing.test.mjs frontend/tests/notification-route.test.mjs frontend/tests/file-url.test.mjs frontend/tests/messenger.test.mjs
 
       - name: Check TypeScript
         working-directory: frontend
@@ -164,7 +170,12 @@ jobs:
 
       - name: Build signed Android App Bundle
         working-directory: frontend/android
-        run: chmod +x gradlew && ./gradlew bundleRelease assembleRelease --no-daemon
+        # R8 and Kotlin lint exhausted the generated default JVM heap in run 52.
+        # Keep release checks enabled, but avoid overlapping memory-heavy workers.
+        run: |
+          chmod +x gradlew
+          ./gradlew bundleRelease assembleRelease --no-daemon --no-parallel --max-workers=1 \
+            -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8"
 
       - name: Verify AAB release certificate
         run: |
@@ -191,7 +202,7 @@ jobs:
       - name: Upload R8 reports
         uses: actions/upload-artifact@v4
         with:
-          name: glint-v1.0.24-r8-reports
+          name: glint-v1.0.25-r8-reports
           path: frontend/android/app/build/outputs/mapping/release/
           retention-days: 30
 
@@ -224,6 +235,6 @@ jobs:
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: glint-v1.0.24-apk-signed
+          name: glint-v1.0.25-apk-signed
           path: frontend/android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30

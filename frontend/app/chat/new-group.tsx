@@ -1,3 +1,4 @@
+import {pickAndUploadImage} from "@/src/lib/media";
 import React, { useState } from "react";
 import { View, Text, Pressable, FlatList, TextInput, ActivityIndicator } from "react-native";
 import { useRouter } from "expo-router";
@@ -18,13 +19,16 @@ export default function NewGroup() {
   const toast = useToast();
   const qc = useQueryClient();
 
+  const [photo,setPhoto]=useState<string|null>(null);
+  const [uploading,setUploading]=useState(false);
+  async function choosePhoto(){setUploading(true);try{const r=await pickAndUploadImage({quality:.7});if(r?.url)setPhoto(r.url);}catch(e:any){toast.show(e.message,"error");}finally{setUploading(false);}}
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
 
   const friends = useQuery({ queryKey: ["friends"], queryFn: () => api.get("/friends") });
 
   const create = useMutation({
-    mutationFn: () => api.post("/chat/groups", { name: name.trim(), member_ids: selected }),
+    mutationFn: () => api.post("/chat/groups", { name: name.trim(), member_ids: selected, avatar:photo }),
     onSuccess: (d) => {
       qc.invalidateQueries({ queryKey: ["conversations"] });
       router.replace(`/chat/group/${d.id}`);
@@ -36,7 +40,7 @@ export default function NewGroup() {
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   }
 
-  const canCreate = name.trim().length > 0 && selected.length >= 2;
+  const canCreate = name.trim().length > 0 && selected.length >= 2 && !uploading;
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -44,14 +48,14 @@ export default function NewGroup() {
         <Pressable onPress={() => router.back()} style={styles.iconBtn} testID="group-back">
           <Icon name="close" size={26} color={colors.onSurface} />
         </Pressable>
-        <Text style={styles.title}>New Group</Text>
+        <Text style={styles.title}>New Messenger group</Text>
         <Pressable onPress={() => canCreate && create.mutate()} disabled={!canCreate || create.isPending} testID="group-create">
           {create.isPending ? <ActivityIndicator color={colors.brand} /> : <Text style={[styles.create, { opacity: canCreate ? 1 : 0.4 }]}>Create</Text>}
         </Pressable>
       </View>
 
       <View style={styles.nameWrap}>
-        <View style={styles.groupIcon}><Icon name="people" size={26} color={colors.onBrandPrimary} /></View>
+        <Pressable onPress={choosePhoto} disabled={uploading} accessibilityLabel="Choose Messenger group photo"><Avatar uri={photo} name={name||"Messenger group"} size={52}/></Pressable>
         <TextInput
           value={name}
           onChangeText={setName}

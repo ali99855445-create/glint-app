@@ -1,3 +1,4 @@
+import {useActiveScreen} from "@/src/hooks/useActiveScreen";
 import {ReportModal} from "@/src/components/ReportModal";
 import {MessageActions, ActionSheet, SheetAction} from "@/src/components/MessageActions";
 import React, { useState } from "react";
@@ -16,6 +17,7 @@ import { useToast } from "@/src/components/Toast";
 import { pickAndUploadImage } from "@/src/lib/media";
 
 export default function GroupChat() {
+  const active=useActiveScreen();
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -31,17 +33,17 @@ export default function GroupChat() {
   const [reportOpen,setReportOpen]=useState(false);
   const [menu,setMenu]=useState(false);
 
-  const chat = useQuery({ queryKey: ["group", id], queryFn: () => api.get(`/chat/group/${id}`), refetchInterval: 4000 });
+  const chat = useQuery({ queryKey: ["group", id], queryFn: () => api.get(`/chat/group/${id}`), enabled:active, refetchInterval: active?4000:false });
   useFocusEffect(React.useCallback(() => { api.post("/chat/heartbeat").catch(() => {}); }, []));
 
   const sendMut = useMutation({
     mutationFn: (body: any) => api.post("/chat/send", { conversation_id: id, ...body, reply_to:reply?.id }),
     onError: (e:any) => toast.show(e.message || "Message could not be sent", "error"),
-    onSuccess: () => { setReply(null); chat.refetch(); qc.invalidateQueries({ queryKey: ["conversations"] }); },
+    onSuccess: () => { setReply(null); chat.refetch(); qc.invalidateQueries({ queryKey: ["conversations"] }); qc.invalidateQueries({queryKey:["unread-count"]}); },
   });
 
   function sendText() {
-    if (!text.trim()) return;
+    if (!text.trim() || sendMut.isPending) return;
     const submitted=text.trim();
     sendMut.mutate({ type: "text", text: submitted },{onSuccess:()=>setText(current=>current.trim()===submitted?"":current)});
   }

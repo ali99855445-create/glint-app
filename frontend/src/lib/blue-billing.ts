@@ -43,3 +43,36 @@ export function createBillingErrorReporter(show: (message: string) => void, now 
     previous = message; at = time; show(message);
   };
 }
+
+/** Never silently replace a promised introductory offer with full-price checkout. */
+export function selectBlueOffer<T extends {id?: string | null; offerTokenAndroid?: string | null; basePlanIdAndroid?: string | null}>(
+  offers: T[], eligible: boolean, introId = 'firstmonth90', basePlanId = 'monthly',
+): T | undefined {
+  const monthly = offers.filter(o => o.offerTokenAndroid && o.basePlanIdAndroid === basePlanId);
+  return eligible ? monthly.find(o => o.id === introId) : monthly.find(o => !o.id || o.id === basePlanId);
+}
+
+/** Plan against the actual Play inventory, not the current Glint login alone.
+ * Each occupied product remains attached to its original account. Catalog
+ * exhaustion fails closed; it never reassigns, consumes or replaces a subscription.
+ */
+export async function planBlueCheckout<T extends {productId: string; purchaseToken?: string | null; purchaseState?: string}>(
+  productIds: string[], purchases: T[], verify: (purchase: T) => Promise<void>,
+): Promise<{restored: boolean; productId?: string}> {
+  const owned=purchases.filter(p=>productIds.includes(p.productId));
+  for(const purchase of owned){
+    if(purchase.purchaseState==='pending')throw new Error('A Glint payment is pending in Google Play. Complete it before another checkout.');
+    if(!purchase.purchaseToken)throw new Error('Google Play could not read an existing subscription. Please retry.');
+    try { await verify(purchase); return {restored:true,productId:purchase.productId}; }
+    catch(error){
+      if(!(error instanceof Error)||error.message!=='Purchase belongs to another Glint account')throw error;
+    }
+  }
+  const occupied=new Set(owned.map(p=>p.productId));
+  return {restored:false,productId:productIds.find(id=>!occupied.has(id))};
+}
+
+export function availableBlueProduct(productIds: string[], purchases: {productId: string}[]): string | undefined {
+  const occupied=new Set(purchases.map(p=>p.productId));
+  return productIds.find(id=>!occupied.has(id));
+}
