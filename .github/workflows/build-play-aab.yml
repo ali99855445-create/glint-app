@@ -170,7 +170,12 @@ jobs:
 
       - name: Build signed Android App Bundle
         working-directory: frontend/android
-        run: chmod +x gradlew && ./gradlew bundleRelease assembleRelease --no-daemon
+        # R8 and Kotlin lint exhausted the generated default JVM heap in run 52.
+        # Keep release checks enabled, but avoid overlapping memory-heavy workers.
+        run: |
+          chmod +x gradlew
+          ./gradlew bundleRelease assembleRelease --no-daemon --no-parallel --max-workers=1 \
+            -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8"
 
       - name: Verify AAB release certificate
         run: |
