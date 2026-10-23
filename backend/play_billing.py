@@ -64,7 +64,7 @@ def verify_subscription(token, user_id):
         data = response.json()
         result = active_subscription(data, user_id)
         if data.get('acknowledgementState') == 'ACKNOWLEDGEMENT_STATE_PENDING':
-            ack = session.post(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE_NAME}/purchases/subscriptions/{result['product_id']}/tokens/{quote(token, safe="")}:acknowledge', json={}, timeout=20)
+            ack = session.post(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE_NAME}/purchases/subscriptions/{result["product_id"]}/tokens/{quote(token, safe="")}:acknowledge', json={}, timeout=20)
             if not ack.ok:
                 raise RuntimeError('Purchase acknowledgement failed; restore the purchase to retry')
         return result
