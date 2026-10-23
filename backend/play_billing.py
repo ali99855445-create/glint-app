@@ -8,8 +8,21 @@ from urllib.parse import quote
 PRODUCT_ID = os.getenv('PLAY_BLUE_PRODUCT_ID', 'glint_blue_monthly')
 INTRO_OFFER_ID = 'firstmonth90'
 
+
+def product_ids():
+    """Only Console-provisioned products may be enabled; never invent saleable SKUs."""
+    extra = [p.strip() for p in os.getenv('PLAY_BLUE_PRODUCT_IDS', '').split(',') if p.strip()]
+    return list(dict.fromkeys([PRODUCT_ID] + extra))
+
+
+def base_plan_ids():
+    """Actual Console IDs, keyed by the enabled product catalog."""
+    plans = {'glint_blue_account_2': 'blue-monthly-2', 'glint_blue_account_3': 'blue-monthly-3'}
+    return {product: plans.get(product, 'monthly') for product in product_ids()}
+
+
 def intro_eligible(user):
-    return not (user.get('blue_intro_used_at') or user.get('blue_purchase_token') or user.get('blue_subscription_ends_at'))
+    return not (user.get('blue_intro_used_at') or user.get('blue_purchase_token') or user.get('blue_subscription_ends_at') or user.get('blue_pass_grants'))
 
 
 PACKAGE_NAME = 'com.glinttechnologies.glint'
@@ -27,11 +40,11 @@ def active_subscription(data, user_id, now=None):
         'SUBSCRIPTION_STATE_ACTIVE', 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'SUBSCRIPTION_STATE_CANCELED'
     }:
         raise ValueError('Subscription is not active')
-    items = [i for i in data.get('lineItems', []) if i.get('productId') == PRODUCT_ID]
+    items = [i for i in data.get('lineItems', []) if i.get('productId') in product_ids()]
     for item in items:
         expiry = datetime.fromisoformat(item.get('expiryTime', '').replace('Z', '+00:00'))
         if expiry > now:
-            return {'ends_at': expiry.isoformat(), 'auto_renew': bool(item.get('autoRenewingPlan', {}).get('autoRenewEnabled')), 'offer_id': item.get('offerDetails', {}).get('offerId'), 'base_plan_id': item.get('offerDetails', {}).get('basePlanId')}
+            return {'product_id': item['productId'], 'ends_at': expiry.isoformat(), 'auto_renew': bool(item.get('autoRenewingPlan', {}).get('autoRenewEnabled')), 'offer_id': item.get('offerDetails', {}).get('offerId'), 'base_plan_id': item.get('offerDetails', {}).get('basePlanId')}
     raise ValueError('Subscription has expired or has the wrong product')
 
 
@@ -51,7 +64,7 @@ def verify_subscription(token, user_id):
         data = response.json()
         result = active_subscription(data, user_id)
         if data.get('acknowledgementState') == 'ACKNOWLEDGEMENT_STATE_PENDING':
-            ack = session.post(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE_NAME}/purchases/subscriptions/{PRODUCT_ID}/tokens/{quote(token, safe="")}:acknowledge', json={}, timeout=20)
+            ack = session.post(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE_NAME}/purchases/subscriptions/{result['product_id']}/tokens/{quote(token, safe="")}:acknowledge', json={}, timeout=20)
             if not ack.ok:
                 raise RuntimeError('Purchase acknowledgement failed; restore the purchase to retry')
         return result

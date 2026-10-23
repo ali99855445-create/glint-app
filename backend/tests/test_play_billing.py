@@ -40,12 +40,53 @@ class BillingTests(unittest.TestCase):
 
     def test_intro_is_once_per_account(self):
         self.assertTrue(billing.intro_eligible({'id':'new'}))
-        for field in ('blue_intro_used_at','blue_purchase_token','blue_subscription_ends_at'):
+        for field in ('blue_intro_used_at','blue_purchase_token','blue_subscription_ends_at', 'blue_pass_grants'):
             self.assertFalse(billing.intro_eligible({field:'already-used'}))
     def test_google_offer_details_are_used(self):
         self.data['lineItems'][0]['offerDetails']={'offerId':'firstmonth90','basePlanId':'monthly'}
         result=billing.active_subscription(self.data,'user-a',self.now)
         self.assertEqual(result['offer_id'],'firstmonth90')
         self.assertEqual(result['base_plan_id'],'monthly')
+
+class CatalogTests(unittest.TestCase):
+    def test_enabled_products_use_actual_console_base_plan_ids(self):
+        from unittest.mock import patch
+        with patch.dict('os.environ', {'PLAY_BLUE_PRODUCT_IDS':'glint_blue_account_2,glint_blue_account_3'}):
+            self.assertEqual(billing.base_plan_ids(), {billing.PRODUCT_ID:'monthly','glint_blue_account_2':'blue-monthly-2','glint_blue_account_3':'blue-monthly-3'})
+        with patch.dict('os.environ', {'PLAY_BLUE_PRODUCT_IDS':''}):
+            self.assertEqual(billing.base_plan_ids(), {billing.PRODUCT_ID:'monthly'})
+    def test_only_explicitly_configured_products_are_accepted(self):
+        from unittest.mock import patch
+        with patch.dict('os.environ', {'PLAY_BLUE_PRODUCT_IDS':'glint_blue_account_2, glint_blue_account_3,glint_blue_account_2'}):
+            self.assertEqual(billing.product_ids(),[billing.PRODUCT_ID,'glint_blue_account_2','glint_blue_account_3'])
+
+    def test_second_product_is_owned_by_its_glint_account_only(self):
+        from unittest.mock import patch
+        now=datetime.now(timezone.utc)
+        data={'externalAccountIdentifiers':{'obfuscatedExternalAccountId':billing.account_id('second')},'subscriptionState':'SUBSCRIPTION_STATE_ACTIVE','lineItems':[{'productId':'glint_blue_account_2','expiryTime':(now+timedelta(days=30)).isoformat(),'autoRenewingPlan':{'autoRenewEnabled':True},'offerDetails':{'offerId':'firstmonth90','basePlanId':'monthly'}}]}
+        with patch.dict('os.environ',{'PLAY_BLUE_PRODUCT_IDS':'glint_blue_account_2'}):
+            result=billing.active_subscription(data,'second',now)
+            self.assertEqual(result['product_id'],'glint_blue_account_2')
+            self.assertTrue(result['auto_renew'])
+            with self.assertRaisesRegex(ValueError,'another Glint account'):
+                billing.active_subscription(data,'first',now)
+        with patch.dict('os.environ',{'PLAY_BLUE_PRODUCT_IDS':''}):
+            with self.assertRaises(ValueError):billing.active_subscription(data,'second',now)
+
+    def test_acknowledgement_uses_the_actual_second_product(self):
+        from unittest.mock import patch, MagicMock
+        data={'externalAccountIdentifiers':{'obfuscatedExternalAccountId':billing.account_id('second')},'subscriptionState':'SUBSCRIPTION_STATE_ACTIVE','acknowledgementState':'ACKNOWLEDGEMENT_STATE_PENDING','lineItems':[{'productId':'glint_blue_account_2','expiryTime':(datetime.now(timezone.utc)+timedelta(days=30)).isoformat(),'autoRenewingPlan':{'autoRenewEnabled':True}}]}
+        session=MagicMock()
+        session.get.return_value.status_code=200
+        session.get.return_value.json.return_value=data
+        session.post.return_value.ok=True
+        with patch.dict('os.environ',{'PLAY_BLUE_PRODUCT_IDS':'glint_blue_account_2','GOOGLE_PLAY_SERVICE_ACCOUNT_JSON':'{}'}), patch('google.oauth2.service_account.Credentials.from_service_account_info'), patch('google.auth.transport.requests.AuthorizedSession') as factory:
+            factory.return_value.__enter__.return_value=session
+            billing.verify_subscription('test-token','second')
+        self.assertIn('/subscriptions/glint_blue_account_2/',session.post.call_args.args[0])
+
+    def test_discount_is_per_glint_account_not_product(self):
+        self.assertTrue(billing.intro_eligible({'id':'second'}))
+        self.assertFalse(billing.intro_eligible({'id':'first','blue_purchase_token':'first-product-token'}))
 
 if __name__ == '__main__': unittest.main()

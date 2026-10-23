@@ -38,6 +38,8 @@ from blue_tick_admin import set_manual_blue_tick
 from verification_badges import BADGES, display_badge, manual_badge, configured_manual_badge, manual_badge_update
 from blue_tick import resolve_blue_entitlements
 from chat_actions import install_chat_actions, message_for_viewer
+from realtime import hub
+from notification_targets import notification_route
 from blue_verification_policy import assert_blue_application_allowed
 
 ROOT_DIR = Path(__file__).parent
@@ -618,6 +620,7 @@ async def notify(to_user: str, from_user: str, ntype: str, ref_id: Optional[str]
     if not recipient or recipient.get("suspended") or recipient.get("deleted_at") or recipient.get("deactivated"):
         return
     if ntype == "message":
+        await hub.publish(to_user, "message")
         if from_user in recipient.get("chat_blocked", []): return
         conversation = await db.conversations.find_one({"id": ref_id, "is_group": True}) if ref_id else None
         if not conversation: conversation = await db.conversations.find_one({"id": conv_id_for(to_user, from_user)})
@@ -630,6 +633,8 @@ async def notify(to_user: str, from_user: str, ntype: str, ref_id: Optional[str]
         "type": ntype, "ref_id": ref_id, "text": text, "message_id": message_id,
         "read": False, "created_at": now_iso(),
     })
+
+    await hub.publish(to_user, "notifications")
 
 
 async def get_user_name(uid: str) -> str:
@@ -2119,7 +2124,7 @@ async def conversations(me=Depends(get_current_user)):
         if c.get("is_group"):
             if c.get("disabled"): continue
             unread = await db.messages.count_documents({
-                "conversation_id": c["id"], "hidden_by": {"$ne": me["id"]}, "removed_for_everyone": {"$ne": True}, "from_user": {"$ne": me["id"]}, "read_by": {"$ne": me["id"]}})
+                "conversation_id": c["id"], "deleted_at": None, "hidden_by": {"$ne": me["id"]}, "removed_for_everyone": {"$ne": True}, "from_user": {"$ne": me["id"]}, "read_by": {"$ne": me["id"]}})
             members = []
             for uid in c.get("participants", [])[:4]:
                 mu = await db.users.find_one({"id": uid}, {"_id": 0})
@@ -2150,7 +2155,7 @@ async def conversations(me=Depends(get_current_user)):
         if not u or u.get("suspended") or u.get("deactivated") or u["id"] in me.get("blocked", []) or me["id"] in u.get("blocked", []):
             continue
         unread = await db.messages.count_documents({
-            "conversation_id": c["id"], "hidden_by": {"$ne": me["id"]}, "removed_for_everyone": {"$ne": True}, "to_user": me["id"], "seen_by_recipient": {"$ne": True}})
+            "conversation_id": c["id"], "deleted_at": None, "hidden_by": {"$ne": me["id"]}, "removed_for_everyone": {"$ne": True}, "to_user": me["id"], "seen_by_recipient": {"$ne": True}})
         last_seen = u.get("last_seen")
         online = False
         if last_seen:
@@ -2182,6 +2187,12 @@ async def create_group(body: GroupCreate, me=Depends(get_current_user)):
     members = list({*body.member_ids, me["id"]})
     if len(members) < 3:
         raise HTTPException(400, "Add at least 2 friends to create a group")
+    if len(members) > 200: raise HTTPException(400, "Maximum 200 members")
+    for uid in members:
+        if uid == me["id"]: continue
+        target = await db.users.find_one({"id": uid, "deleted_at": None, "suspended": {"$ne": True}, "deactivated": {"$ne": True}})
+        if not target or uid in me.get("blocked", []) or me["id"] in target.get("blocked", []) or me["id"] in target.get("chat_blocked", []): raise HTTPException(403, "Cannot add this account")
+        if not await are_friends(me["id"], uid): raise HTTPException(403, "Add friends to create a Messenger group")
     gid = new_id()
     await db.conversations.insert_one({
         "id": gid, "is_group": True, "name": body.name.strip(), "avatar": body.avatar,
@@ -2203,9 +2214,12 @@ async def get_group(group_id: str, me=Depends(get_current_user)):
         raise HTTPException(404, "Group not found")
     if conv.get("disabled"):
         raise HTTPException(403, f"Group disabled. Reason: {conv.get('disabled_reason') or 'Moderation action'}")
-    await db.messages.update_many(
+    receipts = await db.messages.update_many(
         {"conversation_id": group_id, "from_user": {"$ne": me["id"]}, "read_by": {"$ne": me["id"]}},
         {"$addToSet": {"read_by": me["id"]}})
+    if receipts.modified_count:
+        for uid in conv.get("participants", []): await hub.publish(uid, "receipts")
+    await db.notifications.update_many({"to_user": me["id"], "type": "message", "ref_id": group_id, "read": False}, {"$set": {"read": True}})
     members = []
     for uid in conv.get("participants", []):
         mu = await db.users.find_one({"id": uid}, {"_id": 0})
@@ -2247,9 +2261,13 @@ async def get_conversation(user_id: str, me=Depends(get_current_user)):
     if other['id'] in me.get('blocked',[]) or me['id'] in other.get('blocked',[]):
         raise HTTPException(403,'Conversation unavailable')
     # mark delivered/read
-    await db.messages.update_many(
+    receipts = await db.messages.update_many(
         {"conversation_id": cid, "to_user": me["id"], "status": {"$ne": "read"}},
         {"$set": {"status": "read" if me.get("settings", {}).get("read_receipts",True) else "delivered", "seen_by_recipient":True}})
+    await db.notifications.update_many({"to_user": me["id"], "type": "message", "from_user": user_id, "ref_id": user_id, "read": False}, {"$set": {"read": True}})
+    if receipts.modified_count:
+        await hub.publish(user_id, "receipts")
+        await hub.publish(me["id"], "receipts")
     cur = db.messages.find({"conversation_id": cid, "deleted_at": None, "hidden_by": {"$ne": me["id"]}}).sort("created_at", -1).limit(200)
     msgs = []
     async for m in cur:
@@ -2797,7 +2815,8 @@ async def list_notifications(me=Depends(get_current_user)):
     cur = db.notifications.find({"to_user": me["id"]}).sort("created_at", -1).limit(60)
     out = []
     async for n in cur:
-        actor = await db.users.find_one({"id": n["from_user"]}, {"_id": 0})
+        actor = await db.users.find_one({"id": n.get("from_user")}, {"_id": 0})
+        group = await db.conversations.find_one({"id": n.get("ref_id"), "is_group": True, "participants": me["id"], "deleted_at": None}) if n.get("type") == "message" else None
         out.append({
             "id": n["id"],
             "type": n["type"],
@@ -2806,13 +2825,23 @@ async def list_notifications(me=Depends(get_current_user)):
             "read": n.get("read", False),
             "created_at": n["created_at"],
             "actor": public_user(actor),
+            "route": notification_route(n, actor, bool(group)),
         })
     return out
+
+
+@api.post("/notifications/{notification_id}/read")
+async def read_notification(notification_id: str, me=Depends(get_current_user)):
+    result = await db.notifications.update_one({"id": notification_id, "to_user": me["id"]}, {"$set": {"read": True}})
+    if not result.matched_count: raise HTTPException(404, "Notification not found")
+    await hub.publish(me["id"], "notifications")
+    return {"ok": True}
 
 
 @api.post("/notifications/read-all")
 async def read_all_notifications(me=Depends(get_current_user)):
     await db.notifications.update_many({"to_user": me["id"]}, {"$set": {"read": True}})
+    await hub.publish(me["id"], "notifications")
     return {"ok": True}
 
 
@@ -2892,7 +2921,7 @@ class PlayPurchaseBody(BaseModel):
 @api.get("/blue/billing-config")
 async def blue_billing_config(me=Depends(get_current_user)):
     from verification_state import purchase_allowed
-    return {"pass_enabled": blue_pass.enabled(), "pass_product_id": blue_pass.INTRO_PASS_ID if play_billing.intro_eligible(me) else blue_pass.PASS_ID, "pass_product_ids": sorted(blue_pass.PASS_IDS), "product_id": play_billing.PRODUCT_ID, "checkout_ready": bool(os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()) and purchase_allowed(me), "purchase_allowed": purchase_allowed(me), "account_id": play_billing.account_id(me["id"]), "intro_offer_id": play_billing.INTRO_OFFER_ID, "intro_eligible": play_billing.intro_eligible(me), "base_plan_id": "monthly"}
+    return {"pass_enabled": False, "billing_mode": "auto_renewing", "pass_product_id": blue_pass.INTRO_PASS_ID if play_billing.intro_eligible(me) else blue_pass.PASS_ID, "pass_product_ids": sorted(blue_pass.PASS_IDS), "product_id": play_billing.PRODUCT_ID, "product_ids": play_billing.product_ids(), "base_plan_ids": play_billing.base_plan_ids(), "checkout_ready": bool(os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()) and purchase_allowed(me), "purchase_allowed": purchase_allowed(me), "account_id": play_billing.account_id(me["id"]), "intro_offer_id": play_billing.INTRO_OFFER_ID, "intro_eligible": play_billing.intro_eligible(me), "base_plan_id": "monthly"}
 
 
 @api.post("/blue/purchases/verify")
@@ -2905,13 +2934,18 @@ async def blue_verify_purchase(body: PlayPurchaseBody, me=Depends(get_current_us
         raise HTTPException(503, "Purchase verification is temporarily unavailable. Restore your purchase to retry.")
     if result.get("offer_id") == play_billing.INTRO_OFFER_ID:
         owner = await db.users.find_one_and_update(
-            {"id": me["id"], "$or": [{"blue_intro_used_at": {"$exists": False}}, {"blue_intro_used_at": None}, {"blue_intro_purchase_token": body.purchase_token}]},
+            {"id": me["id"], "$or": [
+                {"blue_intro_purchase_token": body.purchase_token},
+                {"blue_intro_used_at": None, "blue_purchase_token": None,
+                 "blue_subscription_ends_at": None, "blue_pass_grants": {"$in": [None, []]}}
+            ]},
             {"$set": {"blue_intro_used_at": me.get("blue_intro_used_at") or now_iso(), "blue_intro_purchase_token": body.purchase_token}})
         if not owner:
             raise HTTPException(409, "The first-month offer has already been used on this Glint account. Contact support for this purchase.")
     await db.users.update_one({"id": me["id"]}, {"$set": {
         "blue_subscription_status": "active", "blue_subscription_ends_at": result["ends_at"],
         "blue_subscription_auto_renew": result["auto_renew"],
+        "blue_product_id": result.get("product_id", play_billing.PRODUCT_ID),
         "blue_purchase_token": body.purchase_token, "blue_subscription_checked_at": now_iso(),
     }})
     return {"ok": True, "payment_confirmed": True}
@@ -3376,6 +3410,8 @@ async def admin_notify(user_id: str, text: str, ref_id: Optional[str] = None):
         "read": False,
         "created_at": now_iso(),
     })
+
+    await hub.publish(user_id, "notifications")
 
 
 def admin_safe_user(u: dict) -> dict:
@@ -4922,6 +4958,11 @@ async def privacy_people(kind:str=Query(...),me=Depends(get_current_user)):
     people={u['id']:u async for u in db.users.find({'id':{'$in':ids},'deleted_at':None,'suspended':{'$ne':True},'deactivated':{'$ne':True}},{'_id':0,'id':1,'full_name':1,'username':1})}
     return [{'id':uid,'name':people.get(uid,{}).get('full_name'),'username':people.get(uid,{}).get('username')} for uid in ids]
 
+from messenger_settings import install_messenger_settings
+install_messenger_settings(api, lambda: db, get_current_user, public_user)
+hub.install(app, get_current_user)
+from community_routes import install_communities
+install_communities(api, lambda: db, get_current_user, now_iso, public_user, notify)
 blue_pass.install_routes(api, db, get_current_user)
 app.include_router(api)
 
@@ -4939,6 +4980,12 @@ async def startup():
     try:
         await db.users.create_index("username")
         await db.users.create_index("email")
+        await db.communities.create_index("id", unique=True)
+        await db.community_members.create_index([("community_id", 1), ("user_id", 1)], unique=True)
+        await db.community_members.create_index([("community_id", 1), ("status", 1), ("user_id", 1)])
+        await db.community_posts.create_index([("community_id", 1), ("deleted_at", 1), ("id", -1)])
+        await db.community_reactions.create_index([("post_id", 1), ("user_id", 1)], unique=True)
+        await db.community_comments.create_index([("post_id", 1), ("deleted_at", 1), ("id", -1)])
         logger.info("MongoDB connection ready")
 
         if ACCOUNT_MIGRATION_USERNAME and ACCOUNT_MIGRATION_EMAIL:
