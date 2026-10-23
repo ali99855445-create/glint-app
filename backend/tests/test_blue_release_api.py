@@ -52,6 +52,32 @@ class ReleaseApiTests(IsolatedAsyncioTestCase):
         user['blue_tick_manual']=False
         self.assertEqual(server.public_user(user)['external_links'],[])
 
+    async def test_new_checkout_uses_subscriptions_even_with_legacy_pass_flag(self):
+        with patch.dict('os.environ', {'PLAY_BLUE_PASSES_ENABLED':'true','GOOGLE_PLAY_SERVICE_ACCOUNT_JSON':'configured'}):
+            result=await server.blue_billing_config({'id':'a'})
+        self.assertFalse(result['pass_enabled'])
+        self.assertEqual(result['billing_mode'],'auto_renewing')
+        self.assertTrue(result['intro_eligible'])
+        self.assertTrue(result['checkout_ready'])
+
+    async def test_existing_paid_pass_blocks_overlapping_subscription(self):
+        me={'id':'a','blue_pass_grants':[{'starts_at':'2020-01-01T00:00:00+00:00','ends_at':'2099-01-01T00:00:00+00:00'}]}
+        with patch.dict('os.environ', {'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON':'configured'}):
+            result=await server.blue_billing_config(me)
+        self.assertFalse(result['intro_eligible'])
+        self.assertFalse(result['checkout_ready'])
+
+    async def test_intro_claim_checks_purchase_history_atomically(self):
+        self.db.users.find_one_and_update.return_value={'id':'a'}
+        with patch.object(server.play_billing,'verify_subscription',return_value={'ends_at':'2099-01-01T00:00:00+00:00','auto_renew':True,'offer_id':'firstmonth90'}):
+            await server.blue_verify_purchase(server.PlayPurchaseBody(purchase_token='intro-token'),{'id':'a'})
+        candidates=self.db.users.find_one_and_update.call_args.args[0]['$or']
+        self.assertIn({'blue_intro_purchase_token':'intro-token'},candidates)
+        first=next(q for q in candidates if 'blue_pass_grants' in q)
+        self.assertIsNone(first['blue_purchase_token'])
+        self.assertIsNone(first['blue_subscription_ends_at'])
+        self.assertIsNone(first['blue_intro_used_at'])
+
     async def test_intro_token_restore_is_idempotent(self):
         self.db.users.find_one_and_update.return_value={'id':'a'}
         with patch.object(server.play_billing,'verify_subscription',return_value={'ends_at':'2099-01-01T00:00:00+00:00','auto_renew':True,'offer_id':'firstmonth90'}):

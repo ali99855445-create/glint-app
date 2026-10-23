@@ -1,3 +1,4 @@
+import {UnreadBadge} from "@/src/components/UnreadBadge";
 import {ActionSheet,SheetAction} from "@/src/components/MessageActions";
 import React, {useState} from "react";
 import { View, Text, Pressable } from "react-native";
@@ -23,10 +24,12 @@ export default function TabsLayout() {
     queryFn: () => api.get("/friends/requests"),
     refetchInterval: 15000,
   });
+  const messages=useQuery({queryKey:["conversations"],queryFn:()=>api.get("/chat/conversations"),refetchInterval:10000});
+  const unreadMessages=(messages.data||[]).reduce((sum:number,v:any)=>sum+(v.unread||0),0);
   const items = [
     ["Home", "home", "/"],
     ["Requests", "people", "/friends"],
-    ["Chats", "chatbubble-ellipses", "/chat"],
+    ["Groups", "people-circle", "/groups"],
     ["Profile", "person", "/profile"],
     ["Notifications", "notifications", "/notifications-tab"],
   ];
@@ -45,6 +48,7 @@ export default function TabsLayout() {
         <Text style={{ color: c.brand, fontSize: 30, fontWeight: "700" }}>
           Glint
         </Text>
+        <Pressable accessibilityLabel="Open Glint menu" onPress={()=>setMenu(true)} style={{padding:6}}><Icon name="ellipsis-horizontal" size={27} color={c.onSurface}/></Pressable>
         <Pressable
           accessibilityRole="search"
           onPress={() => router.push("/search")}
@@ -60,7 +64,7 @@ export default function TabsLayout() {
           <Icon name="search" size={20} color={c.muted} />
           <Text style={{ color: c.muted }}>Search Glint</Text>
         </Pressable>
-        <Pressable accessibilityLabel="Open Glint menu" onPress={()=>setMenu(true)} style={{padding:6}}><Icon name="menu" size={27} color={c.onSurface}/></Pressable>
+        <Pressable accessibilityLabel="Open Messenger" onPress={()=>router.push("/messenger")} style={{padding:6}}><View><Icon name="chatbubbles" size={27} color={c.brand}/><UnreadBadge count={unreadMessages}/></View></Pressable>
       </View>
       <ActionSheet visible={menu} onClose={()=>setMenu(false)} title="Glint menu"><SheetAction label="Settings" onPress={()=>{setMenu(false);router.push("/settings");}}/><SheetAction label="Help Center" onPress={()=>{setMenu(false);router.push("/help");}}/><SheetAction label="My profile" onPress={()=>{setMenu(false);router.navigate("/(tabs)/profile");}}/></ActionSheet>
       <View
@@ -90,11 +94,11 @@ export default function TabsLayout() {
                 borderBottomColor: active ? c.brand : "transparent",
               }}
             >
-              <Icon
+              <View><Icon
                 name={icon as any}
                 size={23}
                 color={active ? c.brand : c.muted}
-              />
+              /><UnreadBadge count={url==="/notifications-tab"?(notifications.data?.count||0):url==="/friends"?(requests.data?.incoming?.length||0):0}/></View>
               <Text
                 style={{
                   color: active ? c.brand : c.muted,
@@ -103,12 +107,7 @@ export default function TabsLayout() {
                 }}
               >
                 {label}
-                {url === "/friends" && requests.data?.incoming?.length
-                  ? " (" + requests.data.incoming.length + ")"
-                  : ""}
-                {url === "/notifications-tab" && notifications.data?.count
-                  ? " (" + notifications.data.count + ")"
-                  : ""}
+
               </Text>
             </Pressable>
           );
@@ -119,7 +118,8 @@ export default function TabsLayout() {
       >
         <Tabs.Screen name="index" />
         <Tabs.Screen name="friends" />
-        <Tabs.Screen name="chat" />
+        <Tabs.Screen name="groups" />
+        <Tabs.Screen name="chat" options={{href:null}} />
         <Tabs.Screen name="profile" />
         <Tabs.Screen name="notifications-tab" />
       </Tabs>

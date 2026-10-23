@@ -1,3 +1,4 @@
+import {useActiveScreen} from "@/src/hooks/useActiveScreen";
 import {ReportModal} from "@/src/components/ReportModal";
 import {MessageActions, ActionSheet, SheetAction} from "@/src/components/MessageActions";
 import React, { useState } from "react";
@@ -25,6 +26,7 @@ function Ticks({ status }: { status: string }) {
 }
 
 export default function ChatDetail() {
+  const active=useActiveScreen();
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -44,13 +46,13 @@ export default function ChatDetail() {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [recStart, setRecStart] = useState(0);
 
-  const chat = useQuery({ queryKey: ["chat", id], queryFn: () => api.get(`/chat/with/${id}`), refetchInterval: 4000 });
+  const chat = useQuery({ queryKey: ["chat", id], queryFn: () => api.get(`/chat/with/${id}`), enabled:active, refetchInterval: active?4000:false });
   useFocusEffect(React.useCallback(() => { api.post("/chat/heartbeat").catch(() => {}); }, []));
 
   const sendMut = useMutation({
     mutationFn: (body: any) => api.post("/chat/send", { to_user: id, ...body, reply_to:reply?.id }),
     onError: (e:any) => toast.show(e.message || "Message could not be sent", "error"),
-    onSuccess: () => { setReply(null); chat.refetch(); qc.invalidateQueries({ queryKey: ["conversations"] }); },
+    onSuccess: () => { setReply(null); chat.refetch(); qc.invalidateQueries({ queryKey: ["conversations"] }); qc.invalidateQueries({queryKey:["unread-count"]}); },
   });
   const muteMut = useMutation({
     mutationFn: () => api.post(`/chat/${chat.data?.id}/mute`),
@@ -58,7 +60,7 @@ export default function ChatDetail() {
   });
 
   function sendText() {
-    if (!text.trim()) return;
+    if (!text.trim() || sendMut.isPending) return;
     const submitted=text.trim();
     sendMut.mutate({ type: "text", text: submitted },{onSuccess:()=>setText(current=>current.trim()===submitted?"":current)});
   }
@@ -111,7 +113,8 @@ export default function ChatDetail() {
           <SheetAction label="View profile" onPress={()=>{setMenu(false);router.push(`/user/${data?.user.username}`);}}/>
           <SheetAction label={data?.muted?"Unmute chat":"Mute chat"} onPress={()=>muteMut.mutate()}/>
           <SheetAction label="Search messages" onPress={()=>{setSearchOpen(v=>!v);setMenu(false);}}/>
-          <SheetAction label={data?.chat_blocked?"Unblock messages":"Block messages in this chat"} onPress={()=>Alert.alert(data?.chat_blocked?"Unblock messages?":"Block messages?","This affects messaging only. Profile blocking is separate.",[{text:"Cancel",style:"cancel"},{text:"Confirm",onPress:async()=>{try{await api.post(`/chat/with/${id}/block`,{blocked:!data?.chat_blocked});setMenu(false);chat.refetch();}catch(e:any){toast.show(e.message,"error");}}}])}/>
+          <SheetAction label={data?.chat_blocked?"Unblock messages":"Block messages in this chat"} onPress={()=>Alert.alert(data?.chat_blocked?"Unblock messages?":"Block messages?","This affects messaging only. Profile blocking is separate.",[{text:"Cancel",style:"cancel"},{text:"Confirm",onPress:async()=>{try{await api.post(`/chat/with/${id}/block`,{blocked:!data?.chat_blocked});setMenu(false);chat.refetch();qc.invalidateQueries({queryKey:["messenger-blocked"]});}catch(e:any){toast.show(e.message,"error");}}}])}/>
+          <SheetAction label="Block on Glint and Messenger" onPress={()=>Alert.alert("Block on Glint?","This blocks profile interactions and direct messages on both Glint and Messenger.",[{text:"Cancel",style:"cancel"},{text:"Block both",style:"destructive",onPress:async()=>{try{await api.post(`/users/${id}/block`);qc.invalidateQueries({queryKey:["conversations"]});qc.invalidateQueries({queryKey:["blocked"]});setMenu(false);router.replace('/messenger');}catch(e:any){toast.show(e.message,"error");}}}])}/>
           <SheetAction label="Report account" onPress={()=>{setMenu(false);setReportOpen(true);}}/>
           <SheetAction label="Clear chat for me" onPress={()=>Alert.alert("Clear chat?","Other participants keep their messages.",[{text:"Cancel",style:"cancel"},{text:"Clear",style:"destructive",onPress:async()=>{try{await api.post(`/chat/${data?.id}/clear`);setMenu(false);chat.refetch();}catch(e:any){toast.show(e.message,"error");}}}])}/>
         </ActionSheet>
@@ -134,7 +137,7 @@ export default function ChatDetail() {
         <ReportModal visible={reportOpen} onClose={()=>setReportOpen(false)} targetType="user" targetId={id!}/>
         <MessageActions message={selected} onClose={()=>setSelected(null)} onChanged={()=>{chat.refetch();qc.invalidateQueries({queryKey:["conversations"]});}} onReply={setReply}/>
         {data?.cannot_message?<View style={{padding:20}}><Text style={{color:colors.muted}}>Messaging is blocked in this chat. You can still view the history.</Text></View>:<View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
-          {recording ? <View style={styles.recordingRow}><View style={styles.recDot} /><Text style={styles.recText}>Recording... release to send</Text><Pressable onPress={() => stopRecording(true)} style={styles.recCancel}><Icon name="trash" size={20} color={colors.error} /></Pressable><Pressable onPress={() => stopRecording(false)} style={styles.recSend}><Icon name="send" size={18} color={colors.onBrandPrimary} /></Pressable></View> : <><Pressable onPress={sendPhoto} style={styles.mediaBtn}><Icon name="image-outline" size={24} color={colors.brand} /></Pressable><TextInput value={text} onChangeText={setText} placeholder="Message..." placeholderTextColor={colors.muted} style={styles.input} multiline />{text.trim() ? <Pressable onPress={sendText} style={styles.sendBtn}><Icon name="arrow-up" size={20} color={colors.onBrandPrimary} /></Pressable> : <Pressable onLongPress={startRecording} onPress={() => toast.show("Hold to record a voice note", "info")} style={styles.sendBtn} disabled={sending}>{sending ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Icon name="mic" size={20} color={colors.onBrandPrimary} />}</Pressable>}</>}
+          {recording ? <View style={styles.recordingRow}><View style={styles.recDot} /><Text style={styles.recText}>Recording... release to send</Text><Pressable onPress={() => stopRecording(true)} style={styles.recCancel}><Icon name="trash" size={20} color={colors.error} /></Pressable><Pressable onPress={() => stopRecording(false)} style={styles.recSend}><Icon name="send" size={18} color={colors.onBrandPrimary} /></Pressable></View> : <><Pressable onPress={sendPhoto} style={styles.mediaBtn}><Icon name="image-outline" size={24} color={colors.brand} /></Pressable><TextInput value={text} onChangeText={setText} placeholder="Message..." placeholderTextColor={colors.muted} style={styles.input} multiline />{text.trim() ? <Pressable onPress={sendText} disabled={sendMut.isPending} accessibilityLabel="Send message" style={[styles.sendBtn,{opacity:sendMut.isPending?.5:1}]}><Icon name="arrow-up" size={20} color={colors.onBrandPrimary} /></Pressable> : <Pressable onLongPress={startRecording} onPress={() => toast.show("Hold to record a voice note", "info")} style={styles.sendBtn} disabled={sending}>{sending ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Icon name="mic" size={20} color={colors.onBrandPrimary} />}</Pressable>}</>}
         </View>}
       </View>
     </KeyboardAvoidingView>
