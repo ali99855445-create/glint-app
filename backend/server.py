@@ -40,6 +40,7 @@ from blue_tick import resolve_blue_entitlements
 from chat_actions import install_chat_actions, message_for_viewer
 from realtime import hub
 from notification_targets import notification_route
+from admin_review_policy import require_decision_reason, decision_message
 from blue_verification_policy import assert_blue_application_allowed
 
 ROOT_DIR = Path(__file__).parent
@@ -847,6 +848,10 @@ class AdminBlueTickBody(BaseModel):
 
 
 class AdminUserEditBody(BaseModel):
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    category: Optional[str] = None
+    reason: str = Field(min_length=10, max_length=4000)
     full_name: Optional[str] = None
     username: Optional[str] = None
     bio: Optional[str] = None
@@ -2872,8 +2877,20 @@ def verification_eligibility(user: dict) -> dict:
     }
 
 
+async def verification_history_state(user):
+    # Old rejection history also prevents a fourth application/checkout, without
+    # changing accounts or charging/cancelling anything during a read.
+    rejected = await db.verifications.count_documents({"user_id": user["id"], "status": "rejected"})
+    state = dict(user)
+    state["blue_rejection_count"] = max(int(user.get("blue_rejection_count") or 0), rejected)
+    if state["blue_rejection_count"] >= 3:
+        state["blue_application_permanent_block"] = True
+    return state
+
+
 @api.post("/verification")
 async def submit_verification(body: VerificationSubmit, me=Depends(get_current_user)):
+    me = await verification_history_state(me)
     if not await app_feature_enabled("verification_enabled", True):
         raise HTTPException(503, "Verification applications are temporarily unavailable.")
     existing = await db.verifications.find_one({"user_id": me["id"], "status": "pending"})
@@ -2909,6 +2926,7 @@ async def submit_verification(body: VerificationSubmit, me=Depends(get_current_u
 
 @api.get("/verification/me")
 async def my_verification(me=Depends(get_current_user)):
+    me = await verification_history_state(me)
     v = await db.verifications.find_one({"user_id": me["id"]}, {"_id": 0}, sort=[("created_at", -1)])
     from verification_state import verification_payload
     return verification_payload(me, v, verification_eligibility(me))
@@ -2920,6 +2938,7 @@ class PlayPurchaseBody(BaseModel):
 
 @api.get("/blue/billing-config")
 async def blue_billing_config(me=Depends(get_current_user)):
+    me = await verification_history_state(me)
     from verification_state import purchase_allowed
     return {"pass_enabled": False, "billing_mode": "auto_renewing", "pass_product_id": blue_pass.INTRO_PASS_ID if play_billing.intro_eligible(me) else blue_pass.PASS_ID, "pass_product_ids": sorted(blue_pass.PASS_IDS), "product_id": play_billing.PRODUCT_ID, "product_ids": play_billing.product_ids(), "base_plan_ids": play_billing.base_plan_ids(), "checkout_ready": bool(os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()) and purchase_allowed(me), "purchase_allowed": purchase_allowed(me), "account_id": play_billing.account_id(me["id"]), "intro_offer_id": play_billing.INTRO_OFFER_ID, "intro_eligible": play_billing.intro_eligible(me), "base_plan_id": "monthly"}
 
@@ -3067,6 +3086,7 @@ async def profile_edit_v2(body: ProfileEditV2, me=Depends(get_current_user)):
 
 
 class ManualBlueBody(BaseModel):
+    reason: str = Field(min_length=10, max_length=4000)
     duration_days: Optional[int] = Field(default=None, ge=1, le=36500, strict=True)
     user_id: str
     enabled: bool
@@ -3077,10 +3097,11 @@ async def manual_blue(body: ManualBlueBody, admin=Depends(require_review_admin))
     user = await db.users.find_one({"id": body.user_id, "deleted_at": None})
     if not user:
         raise HTTPException(404, "User not found")
-    await set_manual_blue_tick(db, body.user_id, body.enabled, duration_days=body.duration_days)
+    reason = require_decision_reason(body.reason)
+    await set_manual_blue_tick(db, body.user_id, body.enabled, reason=reason, duration_days=body.duration_days)
     paid = bool(user.get("blue_identity_approved")) and play_billing.payment_active(user)
     await db.users.update_one({"id": body.user_id}, {"$set": {"golden_tick": body.enabled or paid, "blue_tick_manual": body.enabled, "blue_source": "admin_manual" if body.enabled else "subscription" if paid else None}})
-    await admin_audit("manual_blue", "user", body.user_id, "Manual Blue grant updated", body.user_id)
+    await admin_audit("manual_blue", "user", body.user_id, reason, body.user_id)
     return {"ok": True}
 
 
@@ -3103,16 +3124,19 @@ async def pending_profile_changes(admin=Depends(require_review_admin)):
 
 @api.post("/admin/profile-change/review")
 async def review_profile_change(body: ProfileReviewBody, admin=Depends(require_review_admin)):
+    reason = require_decision_reason(body.note)
+    message = decision_message("Verified profile change", body.decision, reason, body.review_id)
     if body.decision not in {"approved", "rejected"}:
         raise HTTPException(400, "Invalid decision")
     if body.decision == "approved" and not body.identity_match_confirmed:
         raise HTTPException(400, "Confirm the document name and live selfie match the requested identity")
-    review = await db.profile_reviews.find_one_and_update({"id": body.review_id, "status": "pending"}, {"$set": {"status": body.decision, "reviewed_at": now_iso(), "note": body.note}})
+    review = await db.profile_reviews.find_one_and_update({"id": body.review_id, "status": "pending"}, {"$set": {"status": body.decision, "reviewed_at": now_iso(), "note": reason, "decision_message": message}})
     if not review:
         raise HTTPException(404, "Pending review not found")
     if body.decision == "approved":
         await db.users.update_one({"id": review["user_id"], "deleted_at": None}, {"$set": review["changes"]})
-    await admin_notify(review["user_id"], f"Your profile change was {body.decision}.")
+    await admin_notify(review["user_id"], message, body.review_id)
+    await admin_audit("profile_change_" + body.decision, "profile_review", body.review_id, reason, review["user_id"])
     return {"ok": True}
 
 
@@ -3225,7 +3249,7 @@ async def admin_login(body: AdminLogin):
 async def admin_stats(_=Depends(require_admin)):
     active_since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     return {
-        "users": await db.users.count_documents({"deleted_at": None, "verified": True}),
+        "users": await db.users.count_documents({"deleted_at": None, "permanent_deleted": {"$ne": True}}),
         "active_24h": await db.users.count_documents({"deleted_at": None, "last_seen": {"$gte": active_since}}),
         "posts": await db.posts.count_documents({"deleted_at": None}),
         "comments": await db.comments.count_documents({"deleted_at": None}),
@@ -3237,7 +3261,7 @@ async def admin_stats(_=Depends(require_admin)):
         "open_appeals": await db.appeals.count_documents({"status": "open"}),
         "warnings": await db.warnings.count_documents({}),
         "suspended_users": await db.users.count_documents({"deleted_at": None, "suspended": True}),
-        "blue_tick_users": await db.users.count_documents({"deleted_at": None, "golden_tick": True}),
+        "blue_tick_users": sum([1 async for u in db.users.find({"deleted_at": None}) if play_billing.blue_active(u)]),
     }
 
 
@@ -3254,7 +3278,13 @@ async def admin_tickets(_=Depends(require_admin)):
 
 @api.post("/admin/tickets/{ticket_id}/resolve")
 async def resolve_ticket(ticket_id: str, reply: str = Form(...), _=Depends(require_admin)):
-    await db.tickets.update_one({"id": ticket_id}, {"$set": {"status": "resolved", "reply": reply}})
+    reason = require_decision_reason(reply)
+    message = decision_message("Support ticket", "resolved", reason, ticket_id)
+    ticket = await db.tickets.find_one_and_update({"id": ticket_id, "status": {"$ne": "resolved"}}, {"$set": {"status": "resolved", "reply": reason, "decision_message": message, "reviewed_at": now_iso()}})
+    if not ticket:
+        raise HTTPException(409, "Ticket not found or already resolved")
+    await admin_notify(ticket["user_id"], message, ticket_id)
+    await admin_audit("resolve_ticket", "ticket", ticket_id, reason, ticket["user_id"])
     return {"ok": True}
 
 
@@ -3264,9 +3294,13 @@ async def admin_verifications(_=Depends(require_admin)):
     out = []
     async for v in cur:
         u = await db.users.find_one({"id": v["user_id"]}, {"_id": 0})
-        v["user"] = public_user(u) if u else None
+        v["user"] = admin_safe_user(u) if u else None
         out.append(v)
     return out
+
+
+class VerificationRejectionBody(AdminReasonBody):
+    permanent: bool = False
 
 
 class IdentityApprovalBody(AdminReasonBody):
@@ -3279,6 +3313,8 @@ async def approve_verification(vid: str, body: IdentityApprovalBody, _=Depends(r
     if not v:
         raise HTTPException(404, "Not found")
     applicant = await db.users.find_one({"id": v["user_id"]})
+    if applicant:
+        assert_blue_application_allowed(applicant)
     if not applicant or not play_billing.payment_active(applicant):
         raise HTTPException(402, "Applicant needs an active Google Play subscription")
     if v.get("status") != "pending":
@@ -3287,29 +3323,64 @@ async def approve_verification(vid: str, body: IdentityApprovalBody, _=Depends(r
         raise HTTPException(400, "Confirm the document name matches the profile name and the live selfie matches the ID")
     if identity_name(v.get("full_legal_name")) != identity_name(applicant.get("full_name")):
         raise HTTPException(409, "The profile name does not match the submitted identity")
-    reason = (body.reason or "Identity verification approved").strip()
-    await db.verifications.update_one({"id": vid}, {"$set": {"status": "approved", "review_reason": reason, "reviewed_at": now_iso()}})
+    reason = require_decision_reason(body.reason)
+    message = decision_message("Blue Tick verification", "approved", reason, vid)
+    claimed = await db.verifications.find_one_and_update({"id": vid, "status": "pending"}, {"$set": {"status": "approved", "review_reason": reason, "decision_message": message, "reviewed_at": now_iso()}})
+    if not claimed:
+        raise HTTPException(409, "This application has already been reviewed")
     await db.users.update_one({"id": v["user_id"]}, {"$set": {"golden_tick": True, "blue_source": "subscription", "blue_identity_approved": True}})
-    await admin_notify(v["user_id"], f"Your Blue Tick verification was approved. Reason: {reason}")
+    await admin_notify(v["user_id"], message, vid)
     await admin_audit("approve_verification", "verification", vid, reason, v["user_id"])
     return {"ok": True}
 
 
 @api.post("/admin/verifications/{vid}/reject")
-async def reject_verification(vid: str, body: AdminReasonBody = AdminReasonBody(reason="Verification requirements were not met"), _=Depends(require_admin)):
-    v = await db.verifications.find_one({"id": vid})
-    if not v:
-        raise HTTPException(404, "Not found")
-    reason = (body.reason or "Verification requirements were not met").strip()
-    await db.verifications.update_one({"id": vid}, {"$set": {"status": "rejected", "review_reason": reason, "reviewed_at": now_iso()}})
-    await admin_notify(v["user_id"], f"Your Blue Tick verification request was declined. Reason: {reason}")
-    await admin_audit("reject_verification", "verification", vid, reason, v["user_id"])
-    return {"ok": True}
+async def reject_verification(vid: str, body: VerificationRejectionBody, _=Depends(require_admin)):
+    from admin_review_policy import reject_blue_application
+    result = await reject_blue_application(db, vid, body.reason, body.permanent, now_iso)
+    await admin_notify(result["user_id"], result["decision_message"], vid)
+    await admin_audit("permanent_reject_verification" if result["permanent"] else "reject_verification", "verification", vid, body.reason, result["user_id"], {"rejection_count": result["rejection_count"]})
+    if result["permanent"]:
+        await process_blue_cancellation(result["user_id"])
+    return {"ok": True, **{k: v for k, v in result.items() if k != "user_id"}}
+
+
+async def process_blue_cancellation(user_id):
+    user = await db.users.find_one({"id": user_id})
+    if not user or not user.get("blue_application_permanent_block"):
+        raise HTTPException(409, "Only permanently blocked verification cases can stop renewals here")
+    if user.get("blue_cancellation_status") in {"completed", "not_applicable"}:
+        return {"status": user["blue_cancellation_status"]}
+    token = user.get("blue_purchase_token")
+    if not token:
+        status = "not_applicable"
+    else:
+        try:
+            await run_in_threadpool(play_billing.cancel_subscription_renewals, token)
+            status = "completed"
+        except Exception:
+            status = "pending"
+    update = {"blue_cancellation_status": status, "blue_cancellation_checked_at": now_iso()}
+    if status == "completed":
+        update["blue_subscription_auto_renew"] = False
+    await db.users.update_one({"id": user_id}, {"$set": update})
+    await admin_audit("stop_blue_renewals", "user", user_id, "Permanent Blue verification rejection", user_id, {"status": status})
+    return {"status": status}
+
+
+@api.post("/admin/users/{user_id}/blue-cancellation/retry")
+async def retry_blue_cancellation(user_id: str, _=Depends(require_admin)):
+    return await process_blue_cancellation(user_id)
 
 
 @api.get("/admin/reports")
-async def admin_reports(_=Depends(require_admin)):
-    cur = db.reports.find({"status": "open"}, {"_id": 0}).sort("created_at", -1)
+async def admin_reports(target_type: str = Query("all"), target_id: str = Query(""), _=Depends(require_admin)):
+    query = {"status": "open"}
+    if target_type not in {"all", "post", "story", "comment", "user", "group", "message"}:
+        raise HTTPException(400, "Invalid report type")
+    if target_type != "all": query["target_type"] = target_type
+    if target_id: query["target_id"] = target_id
+    cur = db.reports.find(query, {"_id": 0}).sort("created_at", -1).limit(100)
     out = []
     async for r in cur:
         target = None
@@ -3381,8 +3452,15 @@ async def delete_reported(report_id: str, body: AdminReasonBody = AdminReasonBod
 
 
 @api.post("/admin/reports/{report_id}/dismiss")
-async def dismiss_report(report_id: str, _=Depends(require_admin)):
-    await db.reports.update_one({"id": report_id}, {"$set": {"status": "dismissed"}})
+async def dismiss_report(report_id: str, body: AdminReasonBody, _=Depends(require_admin)):
+    reason = require_decision_reason(body.reason)
+    message = decision_message("Content report", "dismissed", reason, report_id)
+    report = await db.reports.find_one_and_update({"id": report_id, "status": "open"}, {"$set": {"status": "dismissed", "resolution_reason": reason, "decision_message": message, "resolved_at": now_iso()}})
+    if not report:
+        raise HTTPException(409, "Report not found or already reviewed")
+    if report.get("reporter_id"):
+        await admin_notify(report["reporter_id"], message, report_id)
+    await admin_audit("dismiss_report", "report", report_id, reason, report.get("reporter_id"))
     return {"ok": True}
 
 
@@ -3438,26 +3516,68 @@ def admin_safe_user(u: dict) -> dict:
         "messaging_restricted_until": u.get("messaging_restricted_until"),
         "restriction_reason": u.get("restriction_reason"),
         "force_logout_at": u.get("force_logout_at"),
+        "category": u.get("category"),
+        "blue_rejection_count": u.get("blue_rejection_count", 0),
+        "blue_application_permanent_block": bool(u.get("blue_application_permanent_block")),
+        "blue_cancellation_status": u.get("blue_cancellation_status"),
     })
     return d
 
 
 @api.get("/admin/users")
-async def admin_users(q: str = Query(""), _=Depends(require_admin)):
-    query = {"permanent_deleted": {"$ne": True}}
+async def admin_users(q: str = Query(""), filter: str = Query("all"), _=Depends(require_admin)):
+    query = {"permanent_deleted": {"$ne": True}, "deleted_at": None}
+    if filter == "suspended": query["suspended"] = True
+    elif filter == "active": query["last_seen"] = {"$gte": (datetime.now(timezone.utc)-timedelta(hours=24)).isoformat()}
+    elif filter not in {"all", "blue"}: raise HTTPException(400, "Invalid user filter")
     if q.strip():
         query["$or"] = [
-            {"username": {"$regex": q.strip(), "$options": "i"}},
-            {"full_name": {"$regex": q.strip(), "$options": "i"}},
-            {"email": {"$regex": q.strip(), "$options": "i"}},
-            {"phone": {"$regex": q.strip(), "$options": "i"}},
+            {"username": {"$regex": re.escape(q.strip()), "$options": "i"}},
+            {"full_name": {"$regex": re.escape(q.strip()), "$options": "i"}},
+            {"email": {"$regex": re.escape(q.strip()), "$options": "i"}},
+            {"phone": {"$regex": re.escape(q.strip()), "$options": "i"}},
         ]
-    cur = db.users.find(query, {"_id": 0}).sort("created_at", -1).limit(100)
+    cur = db.users.find(query, {"_id": 0}).sort("created_at", -1)
+    if filter != "blue": cur = cur.limit(100)
     out = []
     async for u in cur:
         await active_suspension(u)
-        out.append(admin_safe_user(u))
+        if filter != "blue" or play_billing.blue_active(u):
+            out.append(admin_safe_user(u))
+            if len(out) >= 100: break
     return out
+
+
+class AdminDashboardSettings(BaseModel):
+    categories: List[str] = Field(default_factory=lambda: ["General", "Priority", "Creator", "Business"], max_length=30)
+    reason: str
+
+
+@api.get("/admin/dashboard-settings")
+async def dashboard_settings(_=Depends(require_admin)):
+    cfg = await db.config.find_one({"id": "admin_dashboard"}, {"_id": 0}) or {}
+    return {"categories": cfg.get("categories", ["General", "Priority", "Creator", "Business"]), "verification_rejection_limit": 3}
+
+
+@api.post("/admin/dashboard-settings")
+async def save_dashboard_settings(body: AdminDashboardSettings, _=Depends(require_admin)):
+    reason = require_decision_reason(body.reason)
+    categories = list(dict.fromkeys(x.strip() for x in body.categories if x.strip()))
+    if not categories or any(len(x) > 80 for x in categories):
+        raise HTTPException(400, "Provide categories of 1 to 80 characters")
+    await db.config.update_one({"id": "admin_dashboard"}, {"$set": {"categories": categories, "updated_at": now_iso()}}, upsert=True)
+    await admin_audit("dashboard_settings", "config", "admin_dashboard", reason)
+    return {"ok": True}
+
+
+@api.get("/admin/activity-summary")
+async def admin_activity_summary(kind: str = Query(...), _=Depends(require_admin)):
+    if kind == "warnings":
+        return [x async for x in db.warnings.find({}, {"_id": 0}).sort("created_at", -1).limit(100)]
+    if kind == "messages":
+        # Operational metadata only; private message bodies are not needed here.
+        return {"total": await db.messages.count_documents({}), "group_reports": await db.reports.count_documents({"target_type": "message", "status": "open"})}
+    raise HTTPException(400, "Unsupported activity category")
 
 
 @api.get("/admin/users/{user_id}/full")
@@ -3711,6 +3831,24 @@ async def admin_edit_user(user_id: str, body: AdminUserEditBody, _=Depends(requi
     if not u:
         raise HTTPException(404, "User not found")
     update = body.dict(exclude_unset=True)
+    reason = require_decision_reason(update.pop("reason", body.reason))
+    for field in ("email", "phone"):
+        if field not in update: continue
+        value = str(update[field] or "").strip().lower()
+        if value and field == "email" and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+            raise HTTPException(400, "Enter a valid email address")
+        if value and field == "phone" and not re.fullmatch(r"\+[1-9][0-9]{7,14}", value):
+            raise HTTPException(400, "Use international phone format, e.g. +923001234567")
+        if value and await db.users.find_one({field: value, "id": {"$ne": user_id}, "deleted_at": None}):
+            raise HTTPException(409, "Contact is already in use")
+        update[field] = value or None
+        if update[field] != u.get(field):
+            update["phone_verified" if field == "phone" else "verified"] = False
+            update["force_logout_at"] = now_iso()
+    if not update.get("email", u.get("email")) and not update.get("phone", u.get("phone")):
+        raise HTTPException(400, "At least one login contact must remain")
+    if "category" in update and len(str(update["category"] or "")) > 80:
+        raise HTTPException(400, "Category must be at most 80 characters")
     if "username" in update and update["username"] is not None:
         username = update["username"].strip().lower()
         if len(username) < 3:
@@ -3729,8 +3867,8 @@ async def admin_edit_user(user_id: str, body: AdminUserEditBody, _=Depends(requi
         raise HTTPException(400, "Invalid contact visibility")
     if update:
         await db.users.update_one({"id": user_id}, {"$set": update})
-        await admin_audit("edit_user_profile", "user", user_id, "Profile edited by admin", user_id, {"fields": sorted(update.keys())})
-        await admin_notify(user_id, "Your Glint profile information was updated by the Glint Team.")
+        await admin_audit("edit_user_profile", "user", user_id, reason, user_id, {"fields": sorted(update.keys())})
+        await admin_notify(user_id, decision_message("Profile information update", "completed", reason, user_id))
     fresh = await db.users.find_one({"id": user_id}, {"_id": 0})
     return admin_safe_user(fresh)
 
@@ -3895,17 +4033,20 @@ async def admin_appeal_decision(appeal_id: str, body: AdminAppealDecisionBody, _
     decision = body.decision.strip().lower()
     if decision not in {"approved", "rejected"}:
         raise HTTPException(400, "Decision must be approved or rejected")
-    note = body.note.strip()
-    await db.appeals.update_one({"id": appeal_id}, {"$set": {
-        "status": decision, "admin_note": note, "reviewed_at": now_iso()
+    note = require_decision_reason(body.note)
+    message = decision_message("Appeal", decision, note, appeal_id)
+    claimed = await db.appeals.find_one_and_update({"id": appeal_id, "status": "open"}, {"$set": {
+        "status": decision, "admin_note": note, "decision_message": message, "reviewed_at": now_iso()
     }})
+    if not claimed:
+        raise HTTPException(409, "This appeal has already been reviewed")
     user_id = appeal.get("user_id")
     if decision == "approved" and body.restore_account and user_id:
         await db.users.update_one({"id": user_id}, {"$set": {
             "suspended": False, "suspended_until": None, "suspend_reason": None
         }})
     if user_id:
-        await admin_notify(user_id, f"Your Glint appeal was {decision}. {note}".strip())
+        await admin_notify(user_id, message, appeal_id)
     await admin_audit(f"{decision}_appeal", "appeal", appeal_id, note, user_id, {"restore_account": body.restore_account})
     return {"ok": True, "status": decision}
 

@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, Modal, TextInput, Switch, Alert } from "react-native";
+import { Platform, View, Text, Pressable, ScrollView, ActivityIndicator, Modal, TextInput, Switch } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { makeStyles, useTheme, fonts, spacing, radius } from "@/src/theme";
+import { makeStyles, useTheme, fonts as themeFonts, spacing, radius } from "@/src/theme";
 import { api, adminForm, fileUrl, ADMIN_TOKEN_KEY } from "@/src/api/client";
 import { Avatar, UserName } from "@/src/components/Avatar";
 import { Icon } from "@/src/components/Icon";
@@ -14,7 +14,9 @@ import { storage } from "@/src/utils/storage";
 import { IdentityVideo } from "@/src/components/IdentityVideo";
 import { timeAgo } from "@/src/lib/time";
 
-const TABS = ["Users", "Content", "Reports", "Appeals", "Verify", "Tickets", "Controls", "Audit", "System"];
+const fonts = Platform.OS === "web" ? Object.fromEntries(Object.keys(themeFonts).map(key=>[key,"system-ui, sans-serif"])) as typeof themeFonts : themeFonts;
+
+const TABS = ["Users", "Content", "Reports", "Appeals", "Verify", "Tickets", "Warnings", "Messages", "Controls", "Settings", "Audit", "System"];
 const FLAG_LABELS: Record<string, string> = {
   registration_enabled: "New registrations",
   uploads_enabled: "Photo / file uploads",
@@ -36,6 +38,21 @@ export default function AdminDashboard() {
   const qc = useQueryClient();
 
   const [tab, setTab] = useState("Users");
+  const [userFilter, setUserFilter] = useState("all");
+  const [contentKind, setContentKind] = useState("all");
+  const [reportType,setReportType]=useState("all");
+  const [reportTarget,setReportTarget]=useState("");
+  const [reviewAction, setReviewAction] = useState<{id:string; decision:"approved"|"rejected"; permanent:boolean}|null>(null);
+  const [reviewReason, setReviewReason] = useState("");
+  const [identityConfirmed, setIdentityConfirmed] = useState(false);
+  const [dismissId, setDismissId] = useState<string|null>(null);
+  const [dismissReason, setDismissReason] = useState("");
+  const [categoriesText, setCategoriesText] = useState("");
+  const [settingsReason, setSettingsReason] = useState("");
+  const validReason = (value:string) => value.trim().length >= 10 && value.trim().length <= 4000;
+  const actionError = (e:any) => toast.show(e.message || "Action failed. No success was confirmed.", "error");
+  function openSection(section:string, filter="all") { setTab(section); if(section==="Users")setUserFilter(filter); if(section==="Content")setContentKind(filter); }
+
   const [userQuery, setUserQuery] = useState("");
   const [contentStatus, setContentStatus] = useState("all");
   const [replyModal, setReplyModal] = useState<{ id: string } | null>(null);
@@ -63,16 +80,16 @@ export default function AdminDashboard() {
 
   const stats = useQuery({ queryKey: ["admin-stats"], queryFn: () => api.get("/admin/stats", true) });
   const users = useQuery({
-    queryKey: ["admin-users", userQuery],
-    queryFn: () => api.get(`/admin/users?q=${encodeURIComponent(userQuery)}`, true),
+    queryKey: ["admin-users", userQuery, userFilter],
+    queryFn: () => api.get(`/admin/users?q=${encodeURIComponent(userQuery)}&filter=${userFilter}`, true),
     enabled: tab === "Users",
   });
   const contentQ = useQuery({
-    queryKey: ["admin-content", contentStatus],
-    queryFn: () => api.get(`/admin/content?kind=all&status=${contentStatus}`, true),
+    queryKey: ["admin-content", contentStatus, contentKind],
+    queryFn: () => api.get(`/admin/content?kind=${contentKind}&status=${contentStatus}`, true),
     enabled: tab === "Content",
   });
-  const reports = useQuery({ queryKey: ["admin-reports"], queryFn: () => api.get("/admin/reports", true), enabled: tab === "Reports" });
+  const reports = useQuery({ queryKey: ["admin-reports",reportType,reportTarget], queryFn: () => api.get(`/admin/reports?target_type=${reportType}&target_id=${encodeURIComponent(reportTarget)}`, true), enabled: tab === "Reports" });
   const appeals = useQuery({ queryKey: ["admin-appeals"], queryFn: () => api.get("/admin/appeals", true), enabled: tab === "Appeals" });
   const verifications = useQuery({ queryKey: ["admin-verifications"], queryFn: () => api.get("/admin/verifications", true), enabled: tab === "Verify" });
   const tickets = useQuery({ queryKey: ["admin-tickets"], queryFn: () => api.get("/admin/tickets", true), enabled: tab === "Tickets" });
@@ -80,6 +97,11 @@ export default function AdminDashboard() {
   const audit = useQuery({ queryKey: ["admin-audit"], queryFn: () => api.get("/admin/audit", true), enabled: tab === "Audit" });
   const system = useQuery({ queryKey: ["admin-system"], queryFn: () => api.get("/admin/system", true), enabled: tab === "System" });
 
+  const dashboardSettings = useQuery({queryKey:["admin-dashboard-settings"],queryFn:()=>api.get("/admin/dashboard-settings",true),enabled:tab==="Settings"});
+  const activity = useQuery({queryKey:["admin-activity",tab],queryFn:()=>api.get(`/admin/activity-summary?kind=${tab.toLowerCase()}`,true),enabled:tab==="Warnings"||tab==="Messages"});
+  useEffect(()=>{if(dashboardSettings.data)setCategoriesText(dashboardSettings.data.categories.join("\n"));},[dashboardSettings.data]);
+  const saveSettings = useMutation({mutationFn:()=>api.post("/admin/dashboard-settings",{categories:categoriesText.split("\n"),reason:settingsReason.trim()},true),onSuccess:()=>{toast.show("Dashboard settings saved","success");qc.invalidateQueries({queryKey:["admin-dashboard-settings"]});},onError:actionError});
+  const reviewVerification = useMutation({mutationFn:()=>api.post(`/admin/verifications/${reviewAction!.id}/${reviewAction!.decision==="approved"?"approve":"reject"}`,{reason:reviewReason.trim(),permanent:reviewAction!.permanent,identity_match_confirmed:identityConfirmed},true),onSuccess:()=>{toast.show("Decision recorded and user notified","success");setReviewAction(null);refreshAll();},onError:actionError});
   useEffect(() => {
     if (!controls.data) return;
     setBroadcastMsg(controls.data.broadcast?.message || "");
@@ -101,10 +123,13 @@ export default function AdminDashboard() {
     qc.invalidateQueries({ queryKey: ["admin-controls"] });
     qc.invalidateQueries({ queryKey: ["admin-audit"] });
     qc.invalidateQueries({ queryKey: ["admin-system"] });
+    qc.invalidateQueries({queryKey:["admin-activity"]});
+    qc.invalidateQueries({queryKey:["admin-dashboard-settings"]});
   };
 
   const resolveTicket = useMutation({
     mutationFn: () => adminForm(`/admin/tickets/${replyModal!.id}/resolve`, { reply: replyText }),
+    onError: actionError,
     onSuccess: () => {
       toast.show("Ticket resolved", "success");
       setReplyModal(null);
@@ -113,17 +138,9 @@ export default function AdminDashboard() {
     },
   });
 
-  const approveV = useMutation({
-    mutationFn: (id: string) => api.post(`/admin/verifications/${id}/approve`, { reason: "Approved by Glint Team", identity_match_confirmed: true }, true),
-    onSuccess: () => { toast.show("Blue Tick granted", "success"); refreshAll(); },
-  });
-  const rejectV = useMutation({
-    mutationFn: (id: string) => api.post(`/admin/verifications/${id}/reject`, { reason: "Verification requirements were not met" }, true),
-    onSuccess: () => { toast.show("Verification rejected", "info"); refreshAll(); },
-  });
-
   const delReported = useMutation({
     mutationFn: () => api.post(`/admin/reports/${reportDeleteModal!.id}/delete-content`, { reason: moderationReason.trim() }, true),
+    onError: actionError,
     onSuccess: () => {
       toast.show(reportDeleteModal?.target_type === "user" ? "Account removed" : "Content removed", "success");
       setReportDeleteModal(null);
@@ -132,8 +149,9 @@ export default function AdminDashboard() {
     },
   });
   const dismissReport = useMutation({
-    mutationFn: (id: string) => api.post(`/admin/reports/${id}/dismiss`, {}, true),
-    onSuccess: refreshAll,
+    mutationFn: () => api.post(`/admin/reports/${dismissId}/dismiss`, {reason:dismissReason.trim()}, true),
+    onSuccess: () => {setDismissId(null);refreshAll();},
+    onError: actionError,
   });
 
   const contentMut = useMutation({
@@ -161,6 +179,7 @@ export default function AdminDashboard() {
         restore_account: appealAction.restoreAccount,
       }, true);
     },
+    onError: actionError,
     onSuccess: () => {
       toast.show("Appeal decision saved", "success");
       setAppealAction(null);
@@ -204,6 +223,7 @@ export default function AdminDashboard() {
           <Text style={styles.title}>Glint Admin</Text>
           <Text style={styles.subtitle}>Super Admin control center</Text>
         </View>
+        <ActionMenu label="Dashboard settings" actions={[{label:"Dashboard settings & categories",run:()=>setTab("Settings")},{label:"Feature controls",run:()=>setTab("Controls")},{label:"Review history",run:()=>setTab("Audit")},{label:"System health",run:()=>setTab("System")},{label:"Refresh data",run:refreshAll},{label:"Sign out",run:signOut}]} />
         <Pressable onPress={refreshAll} style={styles.iconBtn} testID="admin-refresh">
           <Icon name="refresh-outline" size={21} color={colors.onSurface} />
         </Pressable>
@@ -215,18 +235,18 @@ export default function AdminDashboard() {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}>
         <Button title="Verified name/photo requests" onPress={()=>router.push("/admin/blue-controls")} style={{margin:16}}/>
         <View style={styles.statsGrid}>
-          <Stat icon="people" label="Users" value={S.users} />
-          <Stat icon="pulse" label="Active 24h" value={S.active_24h} />
-          <Stat icon="document-text" label="Posts" value={S.posts} />
-          <Stat icon="chatbubbles" label="Messages" value={S.messages} />
-          <Stat icon="flag" label="Reports" value={S.open_reports} />
-          <Stat icon="mail-open" label="Appeals" value={S.open_appeals} />
-          <Stat icon="ban" label="Suspended" value={S.suspended_users} />
-          <Stat icon="checkmark-circle" label="Blue Tick" value={S.blue_tick_users} />
-          <Stat icon="ribbon" label="Verify Queue" value={S.pending_verifications} />
-          <Stat icon="help-buoy" label="Tickets" value={S.open_tickets} />
-          <Stat icon="warning" label="Warnings" value={S.warnings} />
-          <Stat icon="chatbox" label="Comments" value={S.comments} />
+          <Stat icon="people" label="Users" value={S.users} onPress={()=>openSection("Users","all")} />
+          <Stat icon="pulse" label="Active 24h" value={S.active_24h} onPress={()=>openSection("Users","active")} />
+          <Stat icon="document-text" label="Posts" value={S.posts} onPress={()=>openSection("Content","post")} />
+          <Stat icon="chatbubbles" label="Messages" value={S.messages} onPress={()=>openSection("Messages","all")} />
+          <Stat icon="flag" label="Reports" value={S.open_reports} onPress={()=>openSection("Reports","all")} />
+          <Stat icon="mail-open" label="Appeals" value={S.open_appeals} onPress={()=>openSection("Appeals","all")} />
+          <Stat icon="ban" label="Suspended" value={S.suspended_users} onPress={()=>openSection("Users","suspended")} />
+          <Stat icon="checkmark-circle" label="Blue Tick" value={S.blue_tick_users} onPress={()=>openSection("Users","blue")} />
+          <Stat icon="ribbon" label="Verify Queue" value={S.pending_verifications} onPress={()=>openSection("Verify","all")} />
+          <Stat icon="help-buoy" label="Tickets" value={S.open_tickets} onPress={()=>openSection("Tickets","all")} />
+          <Stat icon="warning" label="Warnings" value={S.warnings} onPress={()=>openSection("Warnings","all")} />
+          <Stat icon="chatbox" label="Comments" value={S.comments} onPress={()=>openSection("Content","comment")} />
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabRow}>
@@ -238,8 +258,12 @@ export default function AdminDashboard() {
         </ScrollView>
 
         <View style={styles.content}>
+          <Text style={styles.modalTitle}>{tab}{tab==="Users"&&userFilter!=="all"?` · ${userFilter}`:""}</Text>
+          {[stats,users,contentQ,reports,appeals,verifications,tickets,controls,audit,system,dashboardSettings,activity].some(q=>q.isError&&q.fetchStatus!=="fetching") && <View style={styles.card}><Text style={styles.warningText}>Some data could not load. Refresh to retry; empty results do not mean there are no records.</Text><Button title="Retry loading" onPress={refreshAll}/></View>}
+
           {tab === "Users" && (
             <View style={{ gap: spacing.sm }}>
+              <ScrollView horizontal contentContainerStyle={styles.filterRow}>{["all","active","suspended","blue"].map(f=><Pressable key={f} onPress={()=>setUserFilter(f)} style={styles.filterChip}><Text style={styles.filterText}>{f}</Text></Pressable>)}</ScrollView>
               <View style={styles.searchWrap}>
                 <Icon name="search" size={18} color={colors.muted} />
                 <TextInput
@@ -263,6 +287,7 @@ export default function AdminDashboard() {
                       <Text style={styles.cardMeta}>{u.email || u.phone || "No contact"}</Text>
                       {(u.posting_restricted_until || u.messaging_restricted_until) ? <Text style={styles.warningText}>Feature restriction active</Text> : null}
                     </View>
+                    <ActionMenu label={`Actions for ${u.full_name}`} actions={[{label:"Profile, contact & category",run:()=>router.push(`/admin/user/${u.id}`)},{label:"Moderation & verification history",run:()=>router.push(`/admin/user/${u.id}`)}]} />
                     <Pressable style={styles.viewBtn} onPress={() => router.push(`/admin/user/${u.id}`)}>
                       <Text style={styles.viewBtnText}>Control</Text>
                       <Icon name="chevron-forward" size={16} color={colors.brand} />
@@ -275,6 +300,7 @@ export default function AdminDashboard() {
 
           {tab === "Content" && (
             <View style={{ gap: spacing.md }}>
+              <ScrollView horizontal contentContainerStyle={styles.filterRow}>{["all","post","story","comment"].map(k=><Pressable key={k} onPress={()=>setContentKind(k)} style={styles.filterChip}><Text style={styles.filterText}>{k}</Text></Pressable>)}</ScrollView>
               <View style={styles.filterRow}>
                 {["all", "active", "removed"].map((f) => (
                   <Pressable key={f} onPress={() => setContentStatus(f)} style={[styles.filterChip, contentStatus === f && { backgroundColor: colors.brandPrimary }]}>
@@ -287,6 +313,7 @@ export default function AdminDashboard() {
                   <View key={`${item.kind}-${item.id}`} style={styles.card}>
                     <View style={styles.cardTop}>
                       <Text style={styles.cardTitle}>{String(item.kind).toUpperCase()}</Text>
+                      <ActionMenu label="Content actions" actions={[{label:item.deleted_at?"Restore with reason":"Remove with reason",run:()=>{setContentAction({id:item.id,kind:item.kind,restore:!!item.deleted_at});setContentReason("");}},{label:"Related reports",run:()=>{setReportType(item.kind);setReportTarget(item.id);setTab("Reports");}}]} />
                       <Text style={styles.cardMeta}>{item.created_at ? timeAgo(item.created_at) : ""}</Text>
                     </View>
                     {item.author ? <Text style={styles.cardMeta}>{item.author.full_name} · @{item.author.username}</Text> : null}
@@ -310,7 +337,7 @@ export default function AdminDashboard() {
           )}
 
           {tab === "Reports" && (
-            <Section loading={reports.isLoading} empty={!reports.data?.length} emptyText="No open reports">
+            <View style={{gap:12}}><ScrollView horizontal contentContainerStyle={styles.filterRow}>{["all","post","story","comment","user","group","message"].map(kind=><Pressable key={kind} onPress={()=>{setReportType(kind);setReportTarget("");}} style={styles.filterChip}><Text style={styles.filterText}>{kind}</Text></Pressable>)}</ScrollView>{reportTarget?<Button title="Show all reports" onPress={()=>{setReportType("all");setReportTarget("");}}/>:null}<Section loading={reports.isLoading} empty={!reports.data?.length} emptyText="No open reports">
               {(reports.data || []).map((r: any) => (
                 <View key={r.id} style={styles.card}>
                   <Text style={styles.cardTitle}>Reported {r.target_type}</Text>
@@ -333,11 +360,11 @@ export default function AdminDashboard() {
                       onPress={() => { setReportDeleteModal({ id: r.id, target_type: r.target_type }); setModerationReason(""); }}
                       style={{ flex: 1 }}
                     />
-                    <Button title="Dismiss" small variant="secondary" onPress={() => dismissReport.mutate(r.id)} style={{ flex: 1 }} />
+                    <Button title="Dismiss" small variant="secondary" onPress={() => {setDismissId(r.id);setDismissReason("");}} style={{ flex: 1 }} />
                   </View>
                 </View>
               ))}
-            </Section>
+            </Section></View>
           )}
 
           {tab === "Appeals" && (
@@ -374,13 +401,17 @@ export default function AdminDashboard() {
                     </View>
                     <StatusPill status={v.status} />
                   </View>
+                  <Text style={styles.cardMeta}>Rejections: {v.user?.blue_rejection_count || 0}/3 · {v.user?.blue_application_permanent_block?"Permanently blocked":"Application review available"}</Text>
+                  {v.review_reason ? <Text style={styles.quoted}>Decision reason: {v.review_reason}</Text>:null}
+                  {v.decision_message ? <Text style={styles.cardDesc}>{v.decision_message}</Text>:null}
+                  {v.user?.blue_cancellation_status ? <Text style={styles.cardMeta}>Stop renewals: {v.user.blue_cancellation_status}</Text>:null}
+                  {v.user?.blue_cancellation_status==="pending" && <Button title="Retry stopping Google Play renewals" onPress={async()=>{try{const r=await api.post(`/admin/users/${v.user.id}/blue-cancellation/retry`,{},true);toast.show(`Cancellation: ${r.status}`,r.status==="completed"?"success":"info");refreshAll();}catch(e){actionError(e);}}}/>}
                   {v.note ? <Text style={styles.cardDesc}>{v.note}</Text> : null}
                   {v.document ? <><Text style={styles.cardMeta}>ID document</Text><Image source={{ uri: fileUrl(v.document) }} style={styles.attachImg} contentFit="cover" /></> : null}
                   {v.selfie ? <><Text style={styles.cardMeta}>Live selfie</Text>{v.selfie_media_type==="video"?<IdentityVideo url={v.selfie}/>:<Image source={{ uri: fileUrl(v.selfie) }} style={styles.attachImg} contentFit="cover" />}</> : null}
                   {v.status === "pending" ? (
                     <View style={styles.actionRow}>
-                      <Button title="Grant Blue Tick" small onPress={() => Alert.alert("Confirm identity match", "Have you reviewed the ID and live selfie, and confirmed the document name matches the profile name and the face matches the ID?", [{text:"Cancel",style:"cancel"},{text:"Confirmed — grant Blue",onPress:()=>approveV.mutate(v.id)}])} style={{ flex: 1 }} />
-                      <Button title="Reject" small variant="secondary" onPress={() => rejectV.mutate(v.id)} style={{ flex: 1 }} />
+                      <ActionMenu label="Verification decision" actions={[{label:"Approve with reason",run:()=>{setReviewAction({id:v.id,decision:"approved",permanent:false});setReviewReason("");setIdentityConfirmed(false);}},{label:"Reject — allow remaining attempts",run:()=>{setReviewAction({id:v.id,decision:"rejected",permanent:false});setReviewReason("");setIdentityConfirmed(false);}},{label:"Permanently reject applications",run:()=>{setReviewAction({id:v.id,decision:"rejected",permanent:true});setReviewReason("");setIdentityConfirmed(false);}}]} />
                     </View>
                   ) : null}
                 </View>
@@ -408,6 +439,9 @@ export default function AdminDashboard() {
             </Section>
           )}
 
+          {tab==="Settings" && <View style={styles.card}><Text style={styles.cardTitle}>Dashboard settings & categories</Text><Text style={styles.cardMeta}>One category per line. Verification applications are permanently blocked after three rejections. Each decision requires a specific reason and is logged.</Text><TextInput accessibilityLabel="User categories" value={categoriesText} onChangeText={setCategoriesText} multiline style={styles.textArea}/><TextInput accessibilityLabel="Settings change reason" value={settingsReason} onChangeText={setSettingsReason} placeholder="Why are these settings changing?" style={styles.input}/><Button title="Save dashboard settings" disabled={!validReason(settingsReason)} onPress={()=>saveSettings.mutate()} loading={saveSettings.isPending}/><Button title="Verified name/photo review" onPress={()=>router.push("/admin/blue-controls")}/></View>}
+          {tab==="Warnings" && <Section loading={activity.isLoading} empty={!activity.data?.length} emptyText="No warnings">{(Array.isArray(activity.data)?activity.data:[]).map((w:any)=><View style={styles.card} key={w.id}><Text style={styles.cardTitle}>{w.reason}</Text><Text style={styles.cardMeta}>{w.status} · {w.created_at?timeAgo(w.created_at):""}</Text><Button title="Open user controls" onPress={()=>router.push(`/admin/user/${w.user_id}`)}/></View>)}</Section>}
+          {tab==="Messages" && <View style={styles.card}><Text style={styles.cardTitle}>Message operations</Text><InfoRow label="Messages stored" value={activity.data?.total}/><InfoRow label="Open message reports" value={activity.data?.group_reports}/><Text style={styles.cardMeta}>Review reported messages in Reports, and messaging restrictions in individual User Controls.</Text><Button title="Open reports" onPress={()=>setTab("Reports")}/><Button title="User messaging controls" onPress={()=>openSection("Users")}/></View>}
           {tab === "Controls" && (
             <View style={{ gap: spacing.lg }}>
               <View style={styles.card}>
@@ -498,11 +532,20 @@ export default function AdminDashboard() {
         </View>
       </ScrollView>
 
+      <Modal visible={!!reviewAction} transparent animationType="fade" onRequestClose={()=>setReviewAction(null)}><ModalShell>
+        <Text style={styles.modalTitle}>{reviewAction?.decision==="approved"?"Approve verification":reviewAction?.permanent?"Permanent rejection":"Reject verification"}</Text>
+        <Text style={styles.modalHint}>A permanent rejection blocks future applications and new checkout. The third rejection also becomes permanent. Google Play cancellation/refund status is tracked separately.</Text>
+        <TextInput accessibilityLabel="Verification decision reason" value={reviewReason} onChangeText={setReviewReason} placeholder="Explain the evidence reviewed, decision and next steps (10–4000 characters)" multiline style={styles.textArea}/>
+        {reviewAction?.decision==="approved"&&<View style={styles.switchRow}><Text style={styles.switchLabel}>I reviewed the document and live selfie and confirmed the identity matches</Text><Switch accessibilityLabel="Confirm identity match" value={identityConfirmed} onValueChange={setIdentityConfirmed}/></View>}
+        <Text style={styles.cardMeta}>The user receives an official Glint Safety & Trust Team notice with this reason and the case reference.</Text>
+        <Button title="Record decision & notify user" disabled={!validReason(reviewReason)||(reviewAction?.decision==="approved"&&!identityConfirmed)} loading={reviewVerification.isPending} onPress={()=>reviewVerification.mutate()}/><Button title="Cancel" variant="secondary" onPress={()=>setReviewAction(null)}/>
+      </ModalShell></Modal>
+      <Modal visible={!!dismissId} transparent animationType="fade" onRequestClose={()=>setDismissId(null)}><ModalShell><Text style={styles.modalTitle}>Dismiss report with reason</Text><TextInput accessibilityLabel="Report decision reason" value={dismissReason} onChangeText={setDismissReason} placeholder="Explain why no action is needed" multiline style={styles.textArea}/><Button title="Save decision" disabled={!validReason(dismissReason)} loading={dismissReport.isPending} onPress={()=>dismissReport.mutate()}/><Button title="Cancel" variant="secondary" onPress={()=>setDismissId(null)}/></ModalShell></Modal>
       <Modal visible={!!replyModal} transparent animationType="fade" onRequestClose={() => setReplyModal(null)}>
         <ModalShell>
           <Text style={styles.modalTitle}>Reply to ticket</Text>
           <TextInput value={replyText} onChangeText={setReplyText} placeholder="Type your reply..." placeholderTextColor={colors.muted} style={styles.textArea} multiline />
-          <Button title="Send & resolve" onPress={() => replyText.trim() && resolveTicket.mutate()} loading={resolveTicket.isPending} />
+          <Button title="Send & resolve" disabled={!validReason(replyText)} onPress={() => resolveTicket.mutate()} loading={resolveTicket.isPending} />
           <Pressable onPress={() => setReplyModal(null)}><Text style={styles.cancel}>Cancel</Text></Pressable>
         </ModalShell>
       </Modal>
@@ -512,7 +555,7 @@ export default function AdminDashboard() {
           <Text style={styles.modalTitle}>{reportDeleteModal?.target_type === "user" ? "Remove reported account" : "Remove reported content"}</Text>
           <Text style={styles.modalHint}>Write the reason. It is saved in the audit log and shown to the affected user where applicable.</Text>
           <TextInput value={moderationReason} onChangeText={setModerationReason} placeholder="Reason..." placeholderTextColor={colors.muted} style={styles.textArea} multiline />
-          <Button title="Confirm removal" variant="danger" onPress={() => moderationReason.trim() && delReported.mutate()} loading={delReported.isPending} disabled={!moderationReason.trim()} />
+          <Button title="Confirm removal" variant="danger" onPress={() => moderationReason.trim() && delReported.mutate()} loading={delReported.isPending} disabled={!validReason(moderationReason)} />
           <Pressable onPress={() => setReportDeleteModal(null)}><Text style={styles.cancel}>Cancel</Text></Pressable>
         </ModalShell>
       </Modal>
@@ -521,7 +564,7 @@ export default function AdminDashboard() {
         <ModalShell>
           <Text style={styles.modalTitle}>{contentAction?.restore ? "Restore content" : "Remove content"}</Text>
           <TextInput value={contentReason} onChangeText={setContentReason} placeholder="Reason..." placeholderTextColor={colors.muted} style={styles.textArea} multiline />
-          <Button title="Confirm" variant={contentAction?.restore ? "primary" : "danger"} onPress={() => contentReason.trim() && contentMut.mutate()} loading={contentMut.isPending} disabled={!contentReason.trim()} />
+          <Button title="Confirm" variant={contentAction?.restore ? "primary" : "danger"} onPress={() => contentReason.trim() && contentMut.mutate()} loading={contentMut.isPending} disabled={!validReason(contentReason)} />
           <Pressable onPress={() => setContentAction(null)}><Text style={styles.cancel}>Cancel</Text></Pressable>
         </ModalShell>
       </Modal>
@@ -530,7 +573,7 @@ export default function AdminDashboard() {
         <ModalShell>
           <Text style={styles.modalTitle}>{appealAction?.decision === "approved" ? "Approve appeal" : "Reject appeal"}</Text>
           <TextInput value={appealNote} onChangeText={setAppealNote} placeholder="Admin note..." placeholderTextColor={colors.muted} style={styles.textArea} multiline />
-          <Button title="Save decision" variant={appealAction?.decision === "rejected" ? "danger" : "primary"} onPress={() => appealMut.mutate()} loading={appealMut.isPending} />
+          <Button title="Save decision" variant={appealAction?.decision === "rejected" ? "danger" : "primary"} onPress={() => appealMut.mutate()} disabled={!validReason(appealNote)} loading={appealMut.isPending} />
           <Pressable onPress={() => setAppealAction(null)}><Text style={styles.cancel}>Cancel</Text></Pressable>
         </ModalShell>
       </Modal>
@@ -538,16 +581,21 @@ export default function AdminDashboard() {
   );
 }
 
-function Stat({ icon, label, value }: any) {
+function Stat({ icon, label, value, onPress }: any) {
   const styles = useStyles();
   const { colors } = useTheme();
   return (
-    <View style={styles.statTile}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${label}`} onPress={onPress} style={styles.statTile}>
       <View style={styles.statIcon}><Icon name={icon} size={18} color={colors.brand} /></View>
       <Text style={styles.statValue}>{value ?? "—"}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-    </View>
+      <Text style={styles.statLabel}>{label} →</Text>
+    </Pressable>
   );
+}
+
+function ActionMenu({label,actions}:{label:string;actions:{label:string;run:()=>void}[]}) {
+  const [open,setOpen]=useState(false);const styles=useStyles();const {colors}=useTheme();
+  return <><Pressable accessibilityRole="button" accessibilityLabel={label} onPress={()=>setOpen(true)} style={styles.iconBtn}><Text style={{fontSize:25,color:colors.onSurface}}>⋯</Text></Pressable><Modal visible={open} transparent animationType="fade" onRequestClose={()=>setOpen(false)}><ModalShell><Text style={styles.modalTitle}>{label}</Text>{actions.map(a=><Button key={a.label} title={a.label} variant="secondary" onPress={()=>{setOpen(false);a.run();}}/>)}<Button title="Close menu" onPress={()=>setOpen(false)}/></ModalShell></Modal></>;
 }
 
 function Section({ loading, empty, emptyText, children }: any) {
@@ -573,7 +621,7 @@ function StatusPill({ status }: { status: string }) {
   const styles = useStyles();
   const { colors } = useTheme();
   const good = status === "approved" || status === "resolved";
-  const bad = status === "rejected";
+  const bad = status === "rejected" || status === "permanently_rejected";
   const fg = good ? colors.success : bad ? colors.error : colors.warning;
   return <View style={[styles.statusPill, { backgroundColor: fg + "20" }]}><Text style={[styles.statusText, { color: fg }]}>{status || "pending"}</Text></View>;
 }
