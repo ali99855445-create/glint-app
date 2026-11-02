@@ -79,8 +79,10 @@ jobs:
         run: |
           set -euo pipefail
           NDK_VERSION=27.1.12297006
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER" || { echo "Android command-line SDK manager is missing"; exit 1; }
           for attempt in 1 2 3; do
-            if sdkmanager --install "ndk;$NDK_VERSION"; then
+            if "$SDKMANAGER" --install "ndk;$NDK_VERSION"; then
               if test -x "$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"; then
                 grep -F "Pkg.Revision = $NDK_VERSION" "$ANDROID_HOME/ndk/$NDK_VERSION/source.properties"
                 exit 0
