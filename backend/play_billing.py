@@ -84,3 +84,20 @@ def payment_active(user, now=None):
 def blue_active(user):
     from blue_tick import blue_tick_active
     return blue_tick_active(user)
+
+
+def cancel_subscription_renewals(token):
+    """Stop future payments; never label an unconfirmed response a cancellation/refund."""
+    import json, os
+    from google.oauth2 import service_account
+    from google.auth.transport.requests import AuthorizedSession
+    raw = os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()
+    if not raw:
+        raise RuntimeError("Google Play cancellation credentials are not configured")
+    credentials = service_account.Credentials.from_service_account_info(
+        json.loads(raw), scopes=["https://www.googleapis.com/auth/androidpublisher"])
+    with AuthorizedSession(credentials) as session:
+        url = f"https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE_NAME}/purchases/subscriptionsv2/tokens/{quote(token, safe='')}:cancel"
+        response = session.post(url, json={"cancellationContext": {"cancellationType": "DEVELOPER_REQUESTED_STOP_PAYMENTS"}}, timeout=20)
+        if not response.ok:
+            raise RuntimeError("Google Play has not confirmed cancellation")
