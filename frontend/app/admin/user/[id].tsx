@@ -1,6 +1,6 @@
 import { IdentityVideo } from "@/src/components/IdentityVideo";
 import React, { useEffect, useState } from "react";
-import { View, Text, ScrollView, Pressable, TextInput, Modal, ActivityIndicator } from "react-native";
+import { Platform, View, Text, ScrollView, Pressable, TextInput, Modal, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -10,8 +10,10 @@ import { Avatar, UserName } from "@/src/components/Avatar";
 import { Icon } from "@/src/components/Icon";
 import { Button } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
-import { makeStyles, useTheme, fonts, spacing, radius } from "@/src/theme";
+import { makeStyles, useTheme, fonts as themeFonts, spacing, radius } from "@/src/theme";
 import { timeAgo } from "@/src/lib/time";
+
+const fonts = Platform.OS === "web" ? Object.fromEntries(Object.keys(themeFonts).map(key=>[key,"system-ui, sans-serif"])) as typeof themeFonts : themeFonts;
 
 type ActionKind =
   | "suspend"
@@ -55,6 +57,10 @@ export default function AdminUserDetail() {
 
   const [editOpen, setEditOpen] = useState(false);
   const [editName, setEditName] = useState("");
+  const [editEmail,setEditEmail]=useState("");
+  const [editPhone,setEditPhone]=useState("");
+  const [editCategory,setEditCategory]=useState("");
+  const [editReason,setEditReason]=useState("");
   const [editUsername, setEditUsername] = useState("");
   const [editBio, setEditBio] = useState("");
   const [editLocation, setEditLocation] = useState("");
@@ -68,6 +74,7 @@ export default function AdminUserDetail() {
   });
 
   const u = detail.data?.user;
+  const categories=useQuery({queryKey:["admin-dashboard-settings"],queryFn:()=>api.get("/admin/dashboard-settings",true)});
 
   useEffect(() => {
     if (!u) return;
@@ -82,6 +89,7 @@ export default function AdminUserDetail() {
   useEffect(() => {
     if (!u || !editOpen) return;
     setEditName(u.full_name || "");
+    setEditEmail(u.email || "");setEditPhone(u.phone || "");setEditCategory(u.category || "");setEditReason("");
     setEditUsername(u.username || "");
     setEditBio(u.bio || "");
     setEditLocation(u.location || "");
@@ -92,6 +100,7 @@ export default function AdminUserDetail() {
   const editProfile = useMutation({
     mutationFn: () => api.post(`/admin/users/${id}/edit`, {
       full_name: editName.trim(),
+      email:editEmail.trim()||null,phone:editPhone.trim()||null,category:editCategory.trim()||null,reason:editReason.trim(),
       username: editUsername.trim(),
       bio: editBio.trim() || null,
       location: editLocation.trim() || null,
@@ -118,7 +127,7 @@ export default function AdminUserDetail() {
   const badgeMut = useMutation({
     mutationFn: (badge: string | null) => api.post(`/admin/users/${id}/badge`, {
       badge, duration_days: badge ? badgeDuration() : null,
-      reason: 'Glint Team manual badge assignment',
+      reason: reason.trim(),
     }, true),
     onSuccess: () => { detail.refetch(); qc.invalidateQueries(); toast.show('Badge duration and benefits updated', 'success'); },
     onError: (e: any) => toast.show(e.message, 'error'),
@@ -126,7 +135,8 @@ export default function AdminUserDetail() {
   const runAction = useMutation({
     mutationFn: async () => {
       if (!action) return;
-      const why = reason.trim() || "Glint Team action";
+      const why = reason.trim();
+      if(why.length<10)throw new Error("Write a specific reason of at least 10 characters");
       switch (action.kind) {
         case "suspend":
           return api.post(`/admin/users/${id}/suspend`, { reason: why }, true);
@@ -283,8 +293,9 @@ export default function AdminUserDetail() {
           </View>
           <TextInput accessibilityLabel="Custom badge duration in days" value={badgeDays} keyboardType="number-pad" placeholder="Custom days" placeholderTextColor={colors.muted} onChangeText={value=>{setBadgeDays(value);setBadgePermanent(false);}} style={{color:colors.onSurface,padding:12,borderWidth:1,borderColor:colors.border,borderRadius:8,marginBottom:8}}/>
           <Text style={{color:colors.muted,marginBottom:10}}>Saving starts the selected duration from now. At expiry the manual badge and its benefits stop automatically. An active paid Blue subscription is kept.</Text>
-          <Button title={badgeMut.isPending?'Saving…':'Save badge and duration'} disabled={badgeMut.isPending} onPress={()=>badgeMut.mutate(selectedBadge)}/>
-          <Button title="Remove manual badge" variant="secondary" disabled={badgeMut.isPending} onPress={()=>badgeMut.mutate(null)} style={{marginVertical:8}}/>
+          <TextInput accessibilityLabel="Badge change reason" value={reason} onChangeText={setReason} placeholder="Reason for badge change (required)" style={styles.input}/>
+          <Button title={badgeMut.isPending?'Saving…':'Save badge and duration'} disabled={badgeMut.isPending||reason.trim().length<10} onPress={()=>badgeMut.mutate(selectedBadge)}/>
+          <Button title="Remove manual badge" variant="secondary" disabled={badgeMut.isPending||reason.trim().length<10} onPress={()=>badgeMut.mutate(null)} style={{marginVertical:8}}/>
           <View style={styles.actionGrid}>
             <Button
               title={u.suspended ? "Restore account" : "Suspend account"}
@@ -448,7 +459,13 @@ export default function AdminUserDetail() {
       <Modal visible={editOpen} transparent animationType="fade" onRequestClose={() => setEditOpen(false)}>
         <View style={styles.modalOverlay}>
           <ScrollView contentContainerStyle={styles.modalCard}>
-            <Text style={styles.modalTitle}>Edit user profile</Text>
+            <Text style={styles.modalTitle}>Edit user profile & contact</Text>
+            <Text style={styles.modalHint}>Changing a login contact requires the user to verify the new contact and ends their previous sessions.</Text>
+            <TextInput accessibilityLabel="User email" value={editEmail} onChangeText={setEditEmail} keyboardType="email-address" autoCapitalize="none" placeholder="Email" style={styles.input}/>
+            <TextInput accessibilityLabel="User phone" value={editPhone} onChangeText={setEditPhone} keyboardType="phone-pad" placeholder="Phone (+country code)" style={styles.input}/>
+            <View style={styles.choiceRow}>{(categories.data?.categories||[]).map((category:string)=><Choice key={category} label={category} active={editCategory===category} onPress={()=>setEditCategory(category)}/>)}</View>
+            <TextInput accessibilityLabel="User category" value={editCategory} onChangeText={setEditCategory} placeholder="User category" style={styles.input}/>
+            <TextInput accessibilityLabel="Profile edit reason" value={editReason} onChangeText={setEditReason} placeholder="Explain the reason for this update" multiline style={styles.input}/>
             <TextInput value={editName} onChangeText={setEditName} placeholder="Full name" placeholderTextColor={colors.muted} style={styles.input} />
             <TextInput value={editUsername} onChangeText={setEditUsername} autoCapitalize="none" placeholder="Username" placeholderTextColor={colors.muted} style={styles.input} />
             <TextInput value={editBio} onChangeText={setEditBio} placeholder="Bio" placeholderTextColor={colors.muted} multiline style={[styles.input, styles.reasonInput]} />
@@ -463,7 +480,7 @@ export default function AdminUserDetail() {
               {["public", "friends", "only_me"].map((x) => <Choice key={x} label={x} active={editContactVisibility === x} onPress={() => setEditContactVisibility(x)} />)}
             </View>
 
-            <Button title="Save profile" onPress={() => editProfile.mutate()} loading={editProfile.isPending} disabled={!editName.trim() || !editUsername.trim()} />
+            <Button title="Save profile" onPress={() => editProfile.mutate()} loading={editProfile.isPending} disabled={!editName.trim() || !editUsername.trim() || editReason.trim().length<10} />
             <Pressable onPress={() => setEditOpen(false)}><Text style={styles.cancel}>Cancel</Text></Pressable>
           </ScrollView>
         </View>

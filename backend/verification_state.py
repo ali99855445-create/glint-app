@@ -11,6 +11,10 @@ def verification_payload(user, application=None, eligibility=None):
     if payload.get('status') == 'approved' and not identity_approved and not active:
         payload['status'] = 'none'
     payload['eligibility'] = eligibility or {}
+    payload['application_permanently_blocked'] = bool(user.get('blue_application_permanent_block'))
+    payload['rejection_count'] = user.get('blue_rejection_count', 0)
+    payload['attempts_remaining'] = max(0, 3 - int(user.get('blue_rejection_count') or 0))
+    payload['cancellation_status'] = user.get('blue_cancellation_status')
     payload['blue_identity_approved'] = identity_approved
     payload['blue_payment_confirmed'] = play_billing.payment_active(user)
     from blue_pass import active_end
@@ -22,4 +26,4 @@ def verification_payload(user, application=None, eligibility=None):
 
 def purchase_allowed(user):
     """A paid period must expire before another checkout for this account."""
-    return not play_billing.payment_active(user)
+    return not user.get('blue_application_permanent_block') and not play_billing.payment_active(user)

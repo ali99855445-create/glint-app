@@ -23,6 +23,8 @@ def _parse(value):
 
 
 def assert_blue_application_allowed(user):
+    if user.get("blue_application_permanent_block"):
+        raise HTTPException(403, "Blue verification applications are permanently blocked on this account. Contact Glint Support for your decision details and Google Play refund guidance.")
     until = _parse(user.get("blue_apply_blocked_until"))
     if until and until > datetime.now(timezone.utc):
         remaining = max(1, (until - datetime.now(timezone.utc)).days + 1)

@@ -13,6 +13,7 @@ class ReleaseApiTests(IsolatedAsyncioTestCase):
     def setUp(self):
         self.db = SimpleNamespace(users=AsyncMock(), files=AsyncMock(), profile_reviews=AsyncMock(), verifications=AsyncMock())
         self.db.profile_reviews.find_one.return_value=None
+        self.db.verifications.count_documents.return_value=0
         self.patch = patch.object(server, 'db', self.db)
         self.patch.start()
         self.addCleanup(self.patch.stop)
