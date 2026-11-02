@@ -4,7 +4,7 @@ import React from "react";
 type Props = {
   name: React.ComponentProps<typeof Ionicons>["name"];
   size?: number;
-  color?: string;
+  color?: React.ComponentProps<typeof Ionicons>["color"];
 };
 
 export function Icon({ name, size = 24, color }: Props) {

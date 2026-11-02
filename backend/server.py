@@ -2767,7 +2767,7 @@ async def messenger_admin_remove_user(user_id: str, body: AdminReasonBody, admin
 
 @api.get("/messenger/admin/reports")
 async def messenger_admin_reports(admin=Depends(require_messenger_admin)):
-    return await admin_reports(admin)
+    return await admin_reports(_=admin)
 
 
 @api.post("/messenger/admin/reports/{report_id}/remove")
@@ -2776,8 +2776,8 @@ async def messenger_admin_remove_reported(report_id: str, body: AdminReasonBody,
 
 
 @api.post("/messenger/admin/reports/{report_id}/dismiss")
-async def messenger_admin_dismiss_report(report_id: str, admin=Depends(require_messenger_admin)):
-    return await dismiss_report(report_id, admin)
+async def messenger_admin_dismiss_report(report_id: str, body: AdminReasonBody, admin=Depends(require_messenger_admin)):
+    return await dismiss_report(report_id, body, admin)
 
 
 @api.get("/messenger/admin/audit")
