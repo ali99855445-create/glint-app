@@ -5107,6 +5107,10 @@ install_communities(api, lambda: db, get_current_user, now_iso, public_user, not
 blue_pass.install_routes(api, db, get_current_user)
 app.include_router(api)
 
+# Versioned web admin uses the same login, data and authorization as Android.
+from admin_web import install_admin_web
+install_admin_web(app, ROOT_DIR / "admin_web_assets")
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
