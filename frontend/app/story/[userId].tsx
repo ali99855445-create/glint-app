@@ -264,7 +264,7 @@ const styles = StyleSheet.create({
   header: { position: "absolute", left: spacing.lg, right: spacing.lg, flexDirection: "row", alignItems: "center", gap: spacing.sm },
   time: { color: "rgba(255,255,255,0.85)", fontFamily: fonts.text, fontSize: 12, marginTop: 1 },
   headerBtn: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
-  tapZones: { ...StyleSheet.absoluteFillObject, flexDirection: "row", top: 120, bottom: 90 },
+  tapZones: { ...StyleSheet.absoluteFill, flexDirection: "row", top: 120, bottom: 90 },
   replyBar: { position: "absolute", left: spacing.lg, right: spacing.lg, flexDirection: "row", alignItems: "center", gap: spacing.sm },
   replyInput: { flex: 1, borderWidth: 1.5, borderColor: "rgba(255,255,255,0.6)", borderRadius: radius.pill, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, color: "#FFFFFF", fontFamily: fonts.text, fontSize: 15 },
   replySend: { width: 44, height: 44, borderRadius: 22, backgroundColor: "rgba(255,255,255,0.2)", alignItems: "center", justifyContent: "center" },

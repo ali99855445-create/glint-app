@@ -93,3 +93,14 @@ def test_historical_rejections_also_block_a_fourth_application_without_read_side
     assert state['blue_application_permanent_block']
     assert state['blue_rejection_count']==4
     assert original=={'id':'u'}
+
+
+def test_messenger_report_wrappers_preserve_filters_and_custom_reason():
+    admin = {'id': 'moderator'}
+    body = server.AdminReasonBody(reason='The reported content follows community rules.')
+    with patch.object(server, 'admin_reports', AsyncMock(return_value=[])) as reports:
+        assert run(server.messenger_admin_reports(admin)) == []
+        reports.assert_awaited_once_with(_=admin)
+    with patch.object(server, 'dismiss_report', AsyncMock(return_value={'ok': True})) as dismiss:
+        assert run(server.messenger_admin_dismiss_report('report', body, admin)) == {'ok': True}
+        dismiss.assert_awaited_once_with('report', body, admin)
