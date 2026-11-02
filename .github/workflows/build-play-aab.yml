@@ -75,6 +75,29 @@ jobs:
       - name: Verify generated Android quality settings
         run: python scripts/check_android_quality.py
 
+      - name: Install and validate required Android NDK
+        run: |
+          set -euo pipefail
+          NDK_VERSION=27.1.12297006
+          for attempt in 1 2 3; do
+            if sdkmanager --install "ndk;$NDK_VERSION"; then
+              if test -x "$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"; then
+                grep -F "Pkg.Revision = $NDK_VERSION" "$ANDROID_HOME/ndk/$NDK_VERSION/source.properties"
+                exit 0
+              fi
+            fi
+            echo "NDK installation attempt $attempt failed; removing incomplete SDK download cache."
+            python - <<'PY'
+          import os, pathlib, shutil
+          sdk = pathlib.Path(os.environ['ANDROID_HOME'])
+          for path in [sdk / '.temp', sdk / 'ndk' / '27.1.12297006']:
+              if path.exists():
+                  shutil.rmtree(path)
+          PY
+          done
+          echo "Required Android NDK could not be installed and validated."
+          exit 1
+
       - name: Restore and validate Play upload keystore
         env:
           GLINT_UPLOAD_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
